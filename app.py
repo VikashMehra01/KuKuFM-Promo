@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +24,14 @@ from promo_finder.llm import ConfigError, LLMAuthError, missing_credentials
 from promo_finder.models import Beat, BeatKind, Segment
 from promo_finder.parse import load_show
 from promo_finder.pipeline import run_pipeline
+from promo_finder.review import (
+    append_review,
+    approved_posting_order,
+    clip_key,
+    gold_from_reviews,
+    load_reviews,
+    review_summary,
+)
 from promo_finder.timecode import format_timecode
 
 load_dotenv()
@@ -43,15 +52,17 @@ st.markdown(
     """
     <style>
       .block-container { padding-top: 2.2rem; padding-bottom: 2rem; }
-      table.promo-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+      table.promo-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; table-layout: fixed; }
       table.promo-table th { text-align: left; font-weight: 600; padding: 0.45rem 0.5rem;
                              border-bottom: 2px solid rgba(128,128,128,0.35); }
       table.promo-table td { vertical-align: top; padding: 0.4rem 0.5rem;
                              border-bottom: 1px solid rgba(128,128,128,0.18); }
-      table.promo-table td:nth-child(1), table.promo-table td:nth-child(3),
-      table.promo-table td:nth-child(6) { text-align: right; }
-      /* hook and cliffhanger share the remaining width equally */
-      table.promo-table th:nth-child(4), table.promo-table th:nth-child(5) { width: 32%; }
+      table.promo-table td:nth-child(1) { text-align: right; }
+      /* 5 columns: # | clip | hook | cuts on | info. Short ones are fixed; the two texts share the rest */
+      table.promo-table th:nth-child(1) { width: 2.4rem; }
+      table.promo-table th:nth-child(2) { width: 8.6rem; }
+      table.promo-table th:nth-child(5) { width: 6.8rem; }
+      table.promo-table td .sub { color: rgba(128,128,128,0.95); font-size: 0.8rem; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -84,12 +95,9 @@ def _run_label(path: Path) -> str:
 
 def _segments_text(promo: dict, *, nowrap: bool = False) -> str:
     """'E01 00:46.80–01:10.40'; with nowrap the table never breaks a segment across lines."""
-    sp, dash = (" ", "⁠–⁠") if nowrap else (" ", "–")
+    # nowrap keeps "E01 00:46.80" together; a line may still break after the dash if space is short
+    sp, dash = (" ", "⁠–") if nowrap else (" ", "–")
     return " + ".join(f"E{s['episode']:02d}{sp}{s['start_tc']}{dash}{s['end_tc']}" for s in promo["segments"])
-
-
-def _nowrap(text: str) -> str:
-    return text.replace(" ", " ").replace("-", "‑")
 
 
 # ------------------------------------------------------------------ sidebar: run
@@ -206,46 +214,104 @@ if run_log.get("errors"):
         for err in run_log["errors"]:
             st.caption(f"• {err}")
 
-# ------------------------------------------------------------------ ranking table
-st.subheader("Posting order")
-table = pd.DataFrame(
-    [
-        {
-            "#": p["rank"],
-            "Segments": _segments_text(p, nowrap=True),
-            "Len": f"{p['duration_s']:.0f}s",
-            "Hook (first 3 s)": p["hook"]["text"],
-            "Cuts on (cliffhanger)": p["cliffhanger"]["text"],
-            "Score": round(p["scores"]["final"] * 100),
-            "Source": _nowrap(SOURCE_LABELS.get(p["source"], p["source"])),
-        }
-        for p in promos
-    ]
+# ------------------------------------------------------------------ reviews (matched by clip, not by ID)
+feedback_path = run_file.parent / "feedback.jsonl"
+reviews = load_reviews(feedback_path)
+STATUS = {"approve": "✅ approved", "reject": "❌ rejected", "adjust": "✏️ adjusted"}
+
+
+def _status(p: dict) -> str:
+    rev = reviews.get(clip_key(p["segments"]))
+    return STATUS[rev["verdict"]] if rev else "—"
+
+
+summary = review_summary(promos, reviews)
+
+# ------------------------------------------------------------------ ranking table (collapsible)
+with st.expander(f"Posting order · {len(promos)} promos", expanded=True):
+    t1, t2, _ = st.columns([1, 1, 2])
+    show_all = t1.toggle(f"Show all {len(promos)}", value=len(promos) <= 10)
+    hide_rejected = t2.toggle("Hide rejected", value=False)
+    shown = [p for p in promos if not (hide_rejected and _status(p).startswith("❌"))]
+    if not show_all:
+        shown = shown[:10]
+    if shown:
+        # Hand-built HTML table: wraps long lines, shows every row, and stacks the short facts so the
+        # hook and cliffhanger keep most of the width even on narrow screens. Every value is escaped.
+        rows_html = []
+        for p in shown:
+            e = html.escape
+            clip = f"{e(_segments_text(p, nowrap=True))}<div class='sub'>{p['duration_s']:.0f}s</div>"
+            info = (f"<b>{round(p['scores']['final'] * 100)}</b> {e(_status(p).split(' ')[0])}"
+                    f"<div class='sub'>{e(SOURCE_LABELS.get(p['source'], p['source']))}</div>")
+            rows_html.append(
+                f"<tr><td>{p['rank']}</td><td>{clip}</td><td>{e(p['hook']['text'])}</td>"
+                f"<td>{e(p['cliffhanger']['text'])}</td><td>{info}</td></tr>"
+            )
+        st.markdown(
+            "<table class='promo-table'><thead><tr><th>#</th><th>Clip</th><th>Hook (first 3 s)</th>"
+            "<th>Cuts on (cliffhanger)</th><th>Score · review</th></tr></thead><tbody>"
+            + "".join(rows_html) + "</tbody></table>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("No promos to show with these filters.")
+    if not show_all and len(promos) > 10:
+        st.caption(f"Showing the top 10 of {len(promos)} - switch on *Show all* for the rest.")
+
+# ------------------------------------------------------------------ exports
+approved_rows = approved_posting_order(promos, reviews)
+st.caption(
+    f"Reviewed {summary['reviewed']} of {len(promos)} · ✅ approved / ✏️ adjusted: {summary['approved']} · "
+    f"❌ rejected: {summary['rejected']}"
+    + (f" · acceptance rate {summary['acceptance_rate']:.0%}" if summary["acceptance_rate"] is not None else "")
 )
-# Plain HTML table: wraps long lines, shows every row and column, no empty index-header band
-# (st.table reserves one). Cell text is HTML-escaped by pandas.
-st.markdown(table.to_html(index=False, escape=True, classes="promo-table", border=0), unsafe_allow_html=True)
-st.download_button(
-    "Download CSV", (run_file.parent / "promos.csv").read_bytes(), file_name=f"{run_file.parent.name}_promos.csv",
-    mime="text/csv",
+e1, e2, e3 = st.columns(3)
+e1.download_button(
+    "⬇ All promos", (run_file.parent / "promos.csv").read_bytes(),
+    file_name=f"{run_file.parent.name}_promos.csv", mime="text/csv", width="stretch",
+    help="CSV of the full posting order, as ranked by the tool.",
 )
+e2.download_button(
+    f"⬇ Approved ({len(approved_rows)})",
+    pd.DataFrame(approved_rows).to_csv(index=False).encode("utf-8-sig") if approved_rows else b"",
+    file_name=f"{run_file.parent.name}_approved.csv", mime="text/csv", width="stretch",
+    disabled=not approved_rows,
+    help="CSV of approved and adjusted promos in rank order, with timing nudges applied - the hand-off list.",
+)
+if e3.button("Save as eval set", width="stretch", disabled=not approved_rows,
+             help="Writes gold_from_reviews.json from your approvals: future runs (other models/prompts) "
+                  "can be scored against it with `promo_finder eval`."):
+    gold_path = run_file.parent / "gold_from_reviews.json"
+    gold_path.write_text(json.dumps(gold_from_reviews(data["show"], promos, reviews), indent=2), encoding="utf-8")
+    st.success(
+        f"Saved {gold_path}. Score a future run against it with:  \n"
+        f"`python -m promo_finder eval --promos <run>/promos.json --gold {gold_path.as_posix()}`"
+    )
 
 # ------------------------------------------------------------------ detail + review
 st.divider()
 st.subheader("Inspect a promo")
+if "_next_promo" in st.session_state:  # set by a review button: move on to the next promo
+    st.session_state["promo_idx"] = st.session_state.pop("_next_promo")
+if st.session_state.get("promo_idx", 0) >= len(promos):
+    st.session_state["promo_idx"] = 0
 idx = st.selectbox(
-    "Promo", range(len(promos)), label_visibility="collapsed",
+    "Promo", range(len(promos)), key="promo_idx", label_visibility="collapsed",
     format_func=lambda i: (f"#{promos[i]['rank']} · {_segments_text(promos[i])} · "
                            f"{SOURCE_LABELS.get(promos[i]['source'], promos[i]['source'])} · "
-                           f"{promos[i]['hook']['text'][:70]}"),
+                           f"{_status(promos[i])} · {promos[i]['hook']['text'][:45]}"),
 )
 promo = promos[idx]
+key = clip_key(promo["segments"])
 source_label = SOURCE_LABELS.get(promo["source"], promo["source"])
 title = promo["title"] if promo["source"] != "heuristic" else f"{source_label} pick"
 st.markdown(f"#### #{promo['rank']} · {title}  \n:gray-background[{source_label}] :gray-background[{promo['promo_id']}] "
             f":gray-background[{promo['duration_s']:.1f}s] :gray-background[hook type: {promo['hook_type']}]")
+if flash := st.session_state.pop("_review_flash", None):
+    st.success(flash)
 
-left, right = st.columns([3, 2], gap="large")
+left, right = st.columns([5, 4], gap="large")
 with left:
     st.markdown("**Script**  \n:green-background[**HOOK**] = the thumb-stopping beat · "
                 ":orange-background[**CUT**] = where the clip ends (cliffhanger)")
@@ -273,7 +339,39 @@ with left:
                 lines.append(f"`{format_timecode(b.start)}` {marker}{who}{b.text}")
             st.markdown("  \n".join(lines) or "_no beats_")
 
+
+def _save(verdict: str, with_nudges: bool = False) -> None:
+    """Button callback: record the review, then move on to the next promo."""
+    nudges = [
+        {"segment": i,
+         "start_nudge_s": float(st.session_state.get(f"ns-{key}-{i}", 0.0)),
+         "end_nudge_s": float(st.session_state.get(f"ne-{key}-{i}", 0.0))}
+        for i in range(len(promo["segments"]))
+    ] if with_nudges else []
+    append_review(feedback_path, promo, verdict, nudges, st.session_state.get(f"note-{key}", ""))
+    st.session_state["_review_flash"] = f"Saved #{promo['rank']} as {STATUS[verdict]}. Showing the next promo."
+    st.session_state["_next_promo"] = (idx + 1) % len(promos)
+
+
 with right:
+    # Review first, so approving/rejecting never needs scrolling.
+    with st.container(border=True):
+        st.markdown("**Editor review**")
+        rev = reviews.get(key)
+        if rev:
+            st.caption(f"Current: **{STATUS[rev['verdict']]}** ({rev['at'][:16].replace('T', ' ')} UTC)"
+                       + (f" - {rev['note']}" if rev.get("note") else ""))
+        st.text_input("Note (optional)", key=f"note-{key}", placeholder="why?")
+        b1, b2 = st.columns(2)
+        b1.button("✅ Approve", type="primary", width="stretch", on_click=_save, args=("approve",))
+        b2.button("❌ Reject", width="stretch", on_click=_save, args=("reject",))
+        with st.expander("✏️ Adjust timing"):
+            for i, _seg in enumerate(promo["segments"]):
+                label = f"Segment {i + 1}" if len(promo["segments"]) > 1 else "Clip"
+                st.number_input(f"{label} start (± seconds)", -10.0, 10.0, 0.0, 0.1, key=f"ns-{key}-{i}")
+                st.number_input(f"{label} end (± seconds)", -10.0, 10.0, 0.0, 0.1, key=f"ne-{key}-{i}")
+            st.button("Save adjustment", width="stretch", on_click=_save, args=("adjust", True))
+
     st.markdown("**Why it works**")
     st.write(promo["why_it_works"] or "—")
     if promo.get("stranger_view"):
@@ -290,40 +388,3 @@ with right:
         for f in promo["flags"]:
             st.caption(f"• {f}")
 
-# full-width review form: the narrow right column squashed it at smaller widths
-st.divider()
-st.subheader("Editor review")
-feedback_path = run_file.parent / "feedback.jsonl"
-previous = []
-if feedback_path.exists():
-    for line_ in feedback_path.read_text(encoding="utf-8").splitlines():
-        try:
-            rec = json.loads(line_)
-        except json.JSONDecodeError:
-            continue
-        if rec.get("promo_id") == promo["promo_id"]:
-            previous.append(rec)
-if previous:
-    last = previous[-1]
-    st.caption(f"Last review of this promo: **{last['verdict']}** ({last['at']})" + (f" - {last['note']}" if last.get("note") else ""))
-
-with st.form(f"review-{promo['promo_id']}"):
-    verdict = st.radio("Verdict", ["approve", "reject", "adjust"], horizontal=True)
-    nudges = []
-    for i, seg in enumerate(promo["segments"]):
-        a, b, _ = st.columns([1, 1, 2])
-        nudges.append({
-            "segment": i,
-            "start_nudge_s": a.number_input(f"Segment {i + 1} start (±s)", -10.0, 10.0, 0.0, 0.1),
-            "end_nudge_s": b.number_input(f"Segment {i + 1} end (±s)", -10.0, 10.0, 0.0, 0.1),
-        })
-    note = st.text_input("Note (why?)")
-    if st.form_submit_button("Save review", type="primary"):
-        record = {
-            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "promo_id": promo["promo_id"], "rank": promo["rank"], "verdict": verdict,
-            "segments": promo["segments"], "nudges": nudges, "note": note,
-        }
-        with feedback_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-        st.success("Saved to feedback.jsonl")

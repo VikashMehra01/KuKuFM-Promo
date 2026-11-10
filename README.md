@@ -119,6 +119,24 @@ Each promo has a `source` (the table's **source** column):
 
 Rules can find a strong hook and an unresolved ending, but they can't write a creative title, so code labels those clips with their episode and pick number. The label marks *where the clip came from*, not how good it is. Every clip, from either source, goes through the same validator and the same blind LLM judge, and the two compete on equal terms in the ranking. In real runs, judged rule-based and LLM clips scored about the same (3.47 vs 3.43). The judge shortlist alternates sources so neither can crowd out the other.
 
+### Editor review: what approving or rejecting does
+
+In the UI, the **Editor review** box sits at the top right of *Inspect a promo*:
+- **✅ Approve** and **❌ Reject** save with one click and jump to the next promo. An optional note is saved with the verdict.
+- **✏️ Adjust timing** lets you nudge each segment's start and end by up to ±10 s, then save the verdict "adjust".
+
+Each review is appended to `outputs/<show>/feedback.jsonl` (`promo_finder/review.py`). The latest verdict for a clip wins, and reviews are used like this:
+
+| Where | What happens |
+|---|---|
+| Posting order table | A **review** icon per row (✅ / ✏️ / ❌), plus a **Hide rejected** toggle. The summary line shows reviewed, approved and rejected counts and the acceptance rate. |
+| **⬇ Approved** | A CSV of approved and adjusted promos in rank order, **with the timing nudges applied**. This is the hand-off list for the editor. |
+| **Save as eval set** | Writes `gold_from_reviews.json` (the `eval/gold.json` format) from your approvals, so a *future* run (another model, prompt or setting) can be scored with `promo_finder eval --promos <run>/promos.json --gold <that file>`. Scoring the same run against its own approvals only gives the acceptance rate, not recall. |
+
+**Reviews are matched to the clip itself** (episode plus start and end of every segment), **not to the promo ID.** IDs like `L-E05-1` are reassigned on every run, so after a re-run an ID-based review could attach to a different clip. With the clip match, a review carries over when the same clip is found again and is simply ignored when it isn't. Reviews don't change the tool's own ranking or `promos.json`; using them to tune the ranking weights is future work and needs many more reviews.
+
+The **Posting order** list is collapsible and shows the top 10 by default; *Show all* lists the rest.
+
 ### How many promos are ranked (top N)
 
 - Default **20** (`ranking.top_n` in `config.yaml`). In the UI, change it with **Promos to rank (top N)** in the sidebar before clicking *Find promos*.
@@ -134,7 +152,8 @@ Rules can find a strong hook and an unresolved ending, but they can't write a cr
 | `report.md` | posting order, why the top 5 come first, notes on quality |
 | `candidates_all.json` | every candidate, including rejected ones and the reason |
 | `run_log.json` | models, prompt versions, token usage, timings, errors, the story bible |
-| `feedback.jsonl` | editor approve/reject/adjust decisions from the UI |
+| `feedback.jsonl` | editor approve/reject/adjust decisions from the UI (matched to clips by content) |
+| `gold_from_reviews.json` | approvals saved as an evaluation set (written by *Save as eval set*) |
 
 ## Tests
 
