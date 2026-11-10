@@ -1,6 +1,6 @@
 """Command-line interface.
 
-    python -m promo_finder run   --input input_pack --out outputs [--mode auto|llm|heuristic] [--episodes 1-10]
+    python -m promo_finder run   --input input_pack --out outputs [--mode llm|heuristic] [--episodes 1-10]
     python -m promo_finder check --input input_pack
     python -m promo_finder eval  --promos outputs/<show>/promos.json --gold eval/gold.json
     python -m promo_finder stability --a run1/promos.json --b run2/promos.json
@@ -60,7 +60,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         args.input, args.out, cfg, mode=args.mode, episodes=parse_episode_range(args.episodes), progress=progress
     )
     calls = result.run_log["llm_calls"]
-    print(f"\nShow: {result.show.name}  |  mode: {result.run_log['mode']}  |  "
+    print(f"\nShow: {result.show.name}  |  mode: {result.run_log['mode']}  |  model: {result.run_log['models']['generator']}  |  "
           f"candidates: {len(result.all_promos)}  |  ranked: {len(result.ranked)}  |  "
           f"LLM calls: {calls['made']} made, {calls['served_from_cache']} cached (planned ~{calls['planned']})")
     for p in result.ranked[:10]:
@@ -109,8 +109,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--input", required=True, help="folder of .txt screenplays, a .zip, or one .txt")
     run.add_argument("--out", default="outputs", help="output root (a sub-folder per show is created)")
     run.add_argument("--config", default="config.yaml")
-    run.add_argument("--mode", choices=["auto", "llm", "heuristic"], default="auto")
     run.add_argument("--episodes", help="subset, e.g. '1-10' or '1,3,5-7'")
+    run.add_argument(
+        "--mode", choices=["llm", "heuristic"], default="llm",
+        help="llm (default; needs the API key, errors if missing) or heuristic (rule-based only, no LLM/key)",
+    )
     run.add_argument("--generator", help="override model spec, e.g. groq:llama-3.3-70b-versatile")
     run.add_argument("--judge", help="override judge model spec (defaults to --generator if given)")
     run.add_argument("--fallback", help="model spec used when the primary is overloaded/out of quota ('none' disables)")

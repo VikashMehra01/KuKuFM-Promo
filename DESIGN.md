@@ -317,7 +317,7 @@ Stack: Python 3.11, pydantic, httpx/official SDKs, Streamlit, pytest.
 
 ### Changes from the original plan, found while building
 
-- **Rule-based baseline in the pipeline.** `--mode heuristic` runs fully offline, and it is also the fallback for any failed LLM step. LLM mode adds the heuristic candidates to the LLM's own, so the judge has more to choose from.
+- **Rule-based candidates in the pipeline.** They compete with the LLM's own candidates, so the judge has more to choose from, and they are the fallback for a step whose LLM call fails mid-run. There are two explicit modes, `--mode llm` (default) and `--mode heuristic` (rule-based only). The old `auto` mode, which silently switched to rules when the key was missing, was removed: a missing key in LLM mode is now reported as an error.
 - **Shortlist before judging.** The judge sees only the top `judge_top_k` (60) distinct candidates by heuristic score. This keeps a full run at about 60–70 calls, which fits free-tier daily limits.
 - **`physical` hook type instead of `slap`.** The keyword list was tightened after "burning outrage" and "fire" in camera notes were wrongly tagged as violence.
 - **Camera-only shots become `VISUAL` beats**, so purely visual moments can still be picked.

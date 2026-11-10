@@ -44,18 +44,37 @@ st.sidebar.header("Run")
 cfg = load_config("config.yaml")
 upload = st.sidebar.file_uploader("Upload screenplays (.zip)", type=["zip"])
 input_path = st.sidebar.text_input("…or local folder", value="input_pack")
-mode = st.sidebar.selectbox("Mode", ["auto", "llm", "heuristic"], help="auto = LLM if an API key is set")
-cfg.llm.generator = st.sidebar.text_input("Generator model", value=cfg.llm.generator)
-cfg.llm.judge = st.sidebar.text_input("Judge model", value=cfg.llm.judge)
-fallback_text = st.sidebar.text_input(
-    "Fallback model", value=cfg.llm.fallback or "", help="used when the main model is overloaded; blank = none"
-)
-cfg.llm.fallback = fallback_text.strip() or None
+MODE_LABELS = {"LLM (needs API key)": "llm", "Rule-based only (no LLM, no key)": "heuristic"}
+mode = MODE_LABELS[st.sidebar.radio(
+    "Mode", list(MODE_LABELS),
+    help="An explicit choice: LLM mode never switches to rules on its own - a missing key is reported instead.",
+)]
+if mode == "llm":
+    cfg.llm.generator = st.sidebar.text_input("Generator model", value=cfg.llm.generator)
+    cfg.llm.judge = st.sidebar.text_input("Judge model", value=cfg.llm.judge)
+    fallback_text = st.sidebar.text_input(
+        "Fallback model", value=cfg.llm.fallback or "", help="used when the main model is overloaded; blank = none"
+    )
+    cfg.llm.fallback = fallback_text.strip() or None
+top_n_cap = cfg.ranking.judge_top_k if mode == "llm" else 100
+cfg.ranking.top_n = int(st.sidebar.number_input(
+    "Promos to rank (top N)", min_value=1, max_value=top_n_cap, value=min(cfg.ranking.top_n, top_n_cap),
+    step=1,
+    help=(f"How many promos the posting order contains. In LLM mode at most {cfg.ranking.judge_top_k} "
+          "clips reach the judge (ranking.judge_top_k in config.yaml), minus duplicates, so the list can be shorter."),
+))
 episodes_text = st.sidebar.text_input("Episodes (blank = all)", placeholder="1-10")
-if missing := missing_credentials(cfg.llm.generator):
-    st.sidebar.caption(f"⚠️ {missing} not set → auto mode will use heuristics.")
+missing_keys = (
+    sorted({m for spec in (cfg.llm.generator, cfg.llm.judge) if (m := missing_credentials(spec))})
+    if mode == "llm" else []
+)
+if missing_keys:
+    st.sidebar.error(
+        f"API key missing: {', '.join(missing_keys)} is not set. Add it to .env (see .env.example) "
+        "and restart the app, or choose the rule-based mode."
+    )
 
-if st.sidebar.button("Find promos", type="primary"):
+if st.sidebar.button("Find promos", type="primary", disabled=bool(missing_keys)):
     if upload is not None:
         tmp = Path(tempfile.mkdtemp(prefix="promo_upload_")) / upload.name
         tmp.write_bytes(upload.getvalue())
@@ -67,7 +86,8 @@ if st.sidebar.button("Find promos", type="primary"):
             progress=lambda step, frac: bar.progress(min(frac, 1.0), text=step),
         )
         st.session_state["run_file"] = str(result.paths["promos_json"])
-        st.success(f"Done: {len(result.ranked)} promos ranked ({result.run_log['mode']} mode).")
+        label = "rule-based mode" if mode == "heuristic" else "LLM mode"
+        st.success(f"Done: {len(result.ranked)} promos ranked ({label}).")
     except (ConfigError, LLMAuthError, FileNotFoundError, ValueError) as exc:
         st.error(str(exc))
 
@@ -92,7 +112,7 @@ promos = data["promos"]
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Show", data["show"][:28])
-c2.metric("Mode", run_log["mode"])
+c2.metric("Main model", run_log["models"]["generator"].split("|")[0].split(":")[-1])
 c3.metric("Candidates", run_log["counts"]["candidates"])
 c4.metric("Ranked", len(promos))
 if run_log.get("errors"):

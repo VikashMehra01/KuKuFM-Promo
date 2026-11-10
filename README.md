@@ -12,8 +12,10 @@ python -m venv .venv
 pip install -r requirements.txt
 cp .env.example .env              # add GEMINI_API_KEY (free: https://aistudio.google.com/apikey)
 
-# Find promos (LLM mode if a key is set, otherwise the rule-based baseline)
+# Find promos with the LLM (needs the API key; stops with a clear error if it is missing)
 python -m promo_finder run --input input_pack --out outputs
+# Rule-based only (no LLM, no key) - chosen explicitly, never as a silent fallback
+python -m promo_finder run --input input_pack --mode heuristic --out runs/rules
 
 # Review UI
 streamlit run app.py
@@ -21,11 +23,18 @@ streamlit run app.py
 
 Input can be a folder (searched recursively), a `.zip` or a single `.txt`.
 
+**Running from the UI:**
+1. Start it with `streamlit run app.py` and open http://localhost:8501.
+2. In the sidebar, pick a folder or upload a `.zip` and choose the **Mode** (LLM, or Rule-based only). In LLM mode also choose the models. Then set **Promos to rank (top N)** and an optional episode range. In LLM mode a missing API key is reported in the sidebar and the run button is disabled.
+3. Click **Find promos**. Keep the tab open while it runs.
+
+Each run replaces `outputs/<show>/`. Use the CLI with `--out` to keep runs side by side.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `run --input X [--mode auto\|llm\|heuristic] [--episodes 1-10] [--generator spec] [--judge spec]` | full pipeline → `outputs/<show>/` |
+| `run --input X [--mode llm\|heuristic] [--episodes 1-10] [--generator spec] [--judge spec] [--fallback spec]` | full pipeline → `outputs/<show>/` |
 | `check --input X` | parse only; per-episode stats and warnings |
 | `eval --promos outputs/<show>/promos.json --gold eval/gold.json` | precision@k, gold recall and boundary error against hand-picked promos |
 | `stability --a run1/promos.json --b run2/promos.json` | how far two runs agree on the top k |
@@ -56,7 +65,65 @@ parse (code) → beats (code) → story bible (1 LLM call) → candidates per ep
 - **The LLM never writes timestamps.** It refers to beat IDs (`E03-B017`), and code maps those to exact times. This removes a whole class of made-up timings.
 - **Code enforces the rules in the brief.** Clips must be 20–60 s, have the hook within 3 s, end on the cliffhanger, never cut mid-line, and cut on camera-shot edges. Each automatic repair is recorded in `flags`.
 - **The judge only sees the clip.** It gets no story context, so its `standalone` score and `stranger_view` act as the "makes sense to a new viewer" test.
-- **Every LLM step has a fallback.** If a call fails, that step falls back to the rule-based method and the failure is logged in `run_log.json`, never hidden. `--mode heuristic` runs fully offline.
+- **LLM mode needs the API key and never silently switches to rules.** A missing key stops the run before any work, and a rejected key stops it on the first call. The rule-based mode only runs when chosen explicitly.
+- **A failed call mid-run degrades only that step.** For example, an episode batch that fails after retries and the fallback model gets rule-based candidates. The failure is logged in `run_log.json` and shown in the UI, never hidden.
+
+## Key concepts
+
+### Caching: how a re-run avoids LLM calls
+
+Every LLM call goes through `CachedLLM` (`promo_finder/llm/cache.py`):
+
+1. Before calling the API, it builds a **cache key**: a SHA-256 hash of the model name, system prompt, user prompt, temperature and JSON schema.
+2. If `.cache/llm/<key>.json` exists, the saved answer is returned and **no API call is made**. The run log counts it under `served_from_cache`.
+3. If it doesn't exist, the API is called and the answer is saved under that key. The file is written to a temporary name first and then renamed, so a crash never leaves a half-written entry.
+
+What this means in practice:
+
+- **The same input gives the same request, so it's free.** Re-running a show with unchanged settings makes 0 calls. A run that stopped half-way resumes from the last finished call, because finished calls are cached.
+- **Anything that changes the request is a cache miss:** a different model (including the fallback model, which is part of the name), an edited prompt, a different schema, different episodes, or a changed story bible.
+- **The API key is *not* part of the key,** so switching to a new key still reuses cached answers.
+- **Failed calls are never cached,** because nothing is saved unless the API answered. A corrupt cache file is ignored and fetched again.
+- **The raw answer is cached before it's parsed.** So if the parser is fixed later, the next run reuses the old answer with the new parser for free. To force fresh answers, delete `.cache/llm/` (or run with a different model).
+- The cache contains script text, so it's git-ignored. It never expires on its own.
+
+### Modes: `llm` and `heuristic`, both chosen explicitly
+
+| Mode | What runs | Key needed |
+|---|---|---|
+| `llm` (default) | The LLM builds the story bible, proposes clips and montages, and judges them. Rule-based candidates are added to the same pool and compete in the ranking. | **Yes.** |
+| `heuristic` (UI: *Rule-based only*) | No LLM at all. Clips come from keyword and score rules, the same validator checks them, and the ranking uses the rule-based score alone. Runs in about 1 second with 0 API calls. | No |
+
+CLI: `--mode llm` (default) or `--mode heuristic`. UI: the **Mode** radio button.
+
+**There is no automatic switching between them.** An earlier `auto` mode quietly ran rules when the key was missing, which produced results that looked real but weren't LLM-quality. It was removed. Now:
+- **Missing key in LLM mode:** the CLI exits (code 2) with `error: No API key for the generator model '…': environment variable GEMINI_API_KEY is not set. Add it to .env … or choose the rule-based mode explicitly.` Nothing is written. The UI shows the same message and disables *Find promos*.
+- **Rejected key:** the run stops on the first call with an authentication error.
+
+**Why keep the rule-based mode:**
+- It's a **baseline** for showing what the LLM adds ("how do you know it's good?").
+- It's a free offline demo.
+- It's a reproducible reference that doesn't depend on model availability.
+
+**What stays rule-based inside an LLM run:** the validator, the rule-based scores, the rule-based candidates that compete in the ranking, and the fallback for a single step whose LLM call fails mid-run (logged, and shown in the UI).
+
+### `rule-based pick` vs. a title: where each promo comes from
+
+Each promo has a `source` (the table's **source** column):
+
+| Source | ID | Title |
+|---|---|---|
+| `llm` | `L-E05-1` | Written by the model, e.g. "Forced Out of the Church" |
+| `llm-cross` | `X-03` | Written by the model, for a 2–3 segment montage |
+| `heuristic` | `H-E05-1` | **Generated by code: `E05 rule-based pick 1`** |
+
+Rules can find a strong hook and an unresolved ending, but they can't write a creative title, so code labels those clips with their episode and pick number. The label marks *where the clip came from*, not how good it is. Every clip, from either source, goes through the same validator and the same blind LLM judge, and the two compete on equal terms in the ranking. In real runs, judged rule-based and LLM clips scored about the same (3.47 vs 3.43). The judge shortlist alternates sources so neither can crowd out the other.
+
+### How many promos are ranked (top N)
+
+- Default **20** (`ranking.top_n` in `config.yaml`). In the UI, change it with **Promos to rank (top N)** in the sidebar before clicking *Find promos*.
+- In LLM mode, at most `ranking.judge_top_k` clips (default 40) reach the judge, minus duplicates. So top N is capped there, and the list can come out a little shorter than N. Rule-based mode has no judge shortlist, so the UI allows up to 100.
+- Changing top N doesn't change any LLM request: a re-run with the same input is served from the cache and only re-ranks.
 
 ## Outputs (`outputs/<show>/`)
 

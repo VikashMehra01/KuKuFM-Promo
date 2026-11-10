@@ -1,19 +1,42 @@
-"""End-to-end tests: heuristic mode and LLM mode with a fake model."""
+"""End-to-end tests of the LLM pipeline with a fake model (no network, no key)."""
 
 import json
 import re
 
+import pytest
+
 from promo_finder.config import Config
 from promo_finder.evaluate import evaluate, stability
-from promo_finder.llm import FakeLLM, LLMError
+from promo_finder.llm import ConfigError, FakeLLM, LLMError
 from promo_finder.models import HookType, Promo, PromoStatus, Scores, Segment, Moment
 from promo_finder.pipeline import run_pipeline
 from promo_finder.rank import overlap_iou, rank_promos
 
 
-def test_heuristic_pipeline_end_to_end(show_dir, tmp_path):
+def test_missing_api_key_stops_the_run_with_a_clear_message(show_dir, tmp_path, monkeypatch):
+    """There is no rule-only fallback mode: no key means a clear error, before any work."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(ConfigError, match="GEMINI_API_KEY"):
+        run_pipeline(show_dir, tmp_path / "out", Config())
+    assert not (tmp_path / "out").exists()  # nothing written
+
+
+def test_rule_based_mode_is_explicit_and_needs_no_key(show_dir, tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     result = run_pipeline(show_dir, tmp_path / "out", Config(), mode="heuristic")
     assert result.run_log["mode"] == "heuristic"
+    assert result.run_log["llm_calls"]["made"] == 0
+    assert result.ranked and all(p.source == "heuristic" for p in result.ranked)
+    assert all(p.scores.hook is None for p in result.ranked)  # no judge in rule mode
+
+
+def test_unknown_mode_is_rejected(show_dir, tmp_path):
+    with pytest.raises(ConfigError, match="mode must be one of"):
+        run_pipeline(show_dir, tmp_path / "out", Config(), mode="auto")  # no silent switching mode
+
+
+def test_pipeline_end_to_end_outputs_respect_the_rules(show_dir, tmp_path):
+    result = run_pipeline(show_dir, tmp_path / "out", Config(), generator=FakeLLM(handler=make_fake_handler()))
     assert result.ranked, "should find at least one promo"
     cfg = Config().promo
     for p in result.ranked:
@@ -202,7 +225,7 @@ def test_stratified_shortlist_gives_each_source_a_fair_share():
 
 
 def test_eval_and_stability(show_dir, tmp_path):
-    result = run_pipeline(show_dir, tmp_path / "out", Config(), mode="heuristic")
+    result = run_pipeline(show_dir, tmp_path / "out", Config(), generator=FakeLLM(handler=make_fake_handler()))
     top = result.ranked[0].segments[0]
     gold = tmp_path / "gold.json"
     gold.write_text(json.dumps({"promos": [
