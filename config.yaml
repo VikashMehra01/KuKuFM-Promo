@@ -7,12 +7,15 @@ llm:
   # Free tier (verified from the API's 429 details, Nov 2026): 20 requests/day PER MODEL
   # per project, and failed/overloaded (503) attempts count too. A full 50-episode run
   # needs ~14 calls, so it fits one model's daily quota.
-  # gemini-3.5-flash: strong Flash with free quota and availability. gemini-3.8-flash is
-  # newer but was heavily overloaded (503) when tested; 2.5-flash is closed to new keys.
-  generator: "gemini:gemini-3.5-flash"
-  judge: "gemini:gemini-3.5-flash"
-  # Used per call when the primary is overloaded (503) or out of quota (429) after retries.
-  # Flash-Lite is fast (~4s) but weaker: fewer candidates, more over-long clips. null disables.
+  # Main model = the most capable model that is reliably AVAILABLE on the free tier.
+  # Nov 2026: every full Flash (3.5 / 3.6 / 3.8) returned 503 "high demand" on almost every
+  # call, while gemini-3.5-flash-lite answered in ~2-4s. A stable Lite beats an overloaded
+  # Flash that falls back on most calls anyway. When Flash capacity recovers (or on a paid
+  # key), switch to e.g. "gemini:gemini-3.8-flash" - the circuit breaker below protects you.
+  # 2.5-flash is closed to new keys.
+  generator: "gemini:gemini-3.5-flash-lite"
+  judge: "gemini:gemini-3.5-flash-lite"
+  # Used per call when the primary is overloaded (503) or out of quota (429). null disables.
   fallback: "gemini:gemini-3.1-flash-lite"
   # null = parameter not sent. Gemini 3.x docs: keep defaults; < 1.0 can cause looping.
   # Set a number (e.g. 0.4 / 0.0) for older or non-Gemini models if you want.
@@ -22,7 +25,9 @@ llm:
   max_retries: 4
   timeout_s: 300               # reasoning models on ~13K-token batches can be slow
   primary_retries_with_fallback: 1     # overloaded primary -> fail over fast...
-  primary_timeout_with_fallback_s: 240 # ...instead of 4 retries x 300s (3.5-flash is slow but worth waiting for)
+  primary_timeout_with_fallback_s: 90  # ...instead of 4 retries x 300s (Lite answers in 2-40s; raise to ~240 for a full Flash)
+  primary_trip_after: 2                # circuit breaker: 2 failures in a row -> stable fallback for the rest of the run
+  fallback_timeout_s: 120              # the fallback is a fast Lite model; one stalled call cost 5 min before this
   cache_dir: ".cache/llm"     # identical prompts are never paid for twice
 
 promo:

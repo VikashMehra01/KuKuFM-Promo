@@ -48,6 +48,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         cfg.llm.judge = args.judge
     elif args.generator:
         cfg.llm.judge = args.generator
+    if args.fallback:
+        cfg.llm.fallback = None if args.fallback.lower() == "none" else args.fallback
     if args.episodes_per_call:
         cfg.promo.max_episodes_per_call = args.episodes_per_call
 
@@ -111,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--episodes", help="subset, e.g. '1-10' or '1,3,5-7'")
     run.add_argument("--generator", help="override model spec, e.g. groq:llama-3.3-70b-versatile")
     run.add_argument("--judge", help="override judge model spec (defaults to --generator if given)")
+    run.add_argument("--fallback", help="model spec used when the primary is overloaded/out of quota ('none' disables)")
     run.add_argument("--episodes-per-call", type=int, help="max episodes per generation call (1 = no batching)")
     run.set_defaults(func=_cmd_run)
 

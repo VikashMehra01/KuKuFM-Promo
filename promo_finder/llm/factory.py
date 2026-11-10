@@ -81,7 +81,8 @@ def build_client(spec: str, cfg: LLMConfig, *, use_cache: bool = True, fallback:
             max_retries=min(cfg.max_retries, cfg.primary_retries_with_fallback),
             timeout_s=min(cfg.timeout_s, cfg.primary_timeout_with_fallback_s),
         )
-        client: LLMClient = FallbackLLM(primary, _http_client(fallback, cfg))
+        secondary = _http_client(fallback, cfg, timeout_s=min(cfg.timeout_s, cfg.fallback_timeout_s))
+        client: LLMClient = FallbackLLM(primary, secondary, trip_after=cfg.primary_trip_after)
     else:
         client = _http_client(spec, cfg)
     return CachedLLM(client, cfg.cache_dir) if use_cache else client
@@ -91,5 +92,8 @@ def served_by(client: LLMClient | None) -> dict[str, int]:
     """Which underlying model answered how many calls (unwraps cache/fallback)."""
     inner = getattr(client, "inner", client)
     if isinstance(inner, FallbackLLM):
-        return dict(inner.served)
+        served = dict(inner.served)
+        if inner.tripped:
+            served["primary_tripped"] = inner.consecutive_failures
+        return served
     return {inner.name: inner.usage.calls} if inner is not None else {}

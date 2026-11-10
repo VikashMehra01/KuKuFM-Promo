@@ -36,7 +36,9 @@ Set models as `provider:model` in `config.yaml`, with an env var, or on the comm
 
 ```bash
 python -m promo_finder run --input input_pack --generator groq:llama-3.3-70b-versatile
-PROMO_GENERATOR=openrouter:<model> PROMO_JUDGE=gemini:gemini-2.5-flash python -m promo_finder run ...
+PROMO_GENERATOR=openrouter:<model> PROMO_JUDGE=gemini:gemini-3.5-flash-lite python -m promo_finder run ...
+# Prefer a stronger main model but stay safe when it is overloaded (circuit breaker -> fallback):
+python -m promo_finder run --input input_pack --generator gemini:gemini-3.8-flash --fallback gemini:gemini-3.5-flash-lite
 # Any OpenAI-compatible endpoint (e.g. one provided in an interview):
 LLM_BASE_URL=https://host/v1 LLM_API_KEY=... python -m promo_finder run --input X --generator custom:<model>
 ```

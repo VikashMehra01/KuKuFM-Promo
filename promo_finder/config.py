@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class LLMConfig(BaseModel):
-    generator: str = "gemini:gemini-3.5-flash"
-    judge: str = "gemini:gemini-3.5-flash"
+    generator: str = "gemini:gemini-3.5-flash-lite"
+    judge: str = "gemini:gemini-3.5-flash-lite"
     fallback: str | None = "gemini:gemini-3.1-flash-lite"  # used when the primary is overloaded
     # None = don't send the parameter (required for Gemini 3.x, which degrades below 1.0)
     temperature: float | None = Field(None, ge=0, le=2)
@@ -22,6 +22,8 @@ class LLMConfig(BaseModel):
     # when a fallback exists, the primary fails over fast instead of waiting out overload
     primary_retries_with_fallback: int = Field(1, ge=0)
     primary_timeout_with_fallback_s: float = Field(120, gt=0)
+    primary_trip_after: int = Field(2, ge=0)  # consecutive primary failures before skipping it (0 = never)
+    fallback_timeout_s: float = Field(120, gt=0)  # fallbacks are fast Lite models; a stalled call must not cost 5 min
     cache_dir: str = ".cache/llm"
 
 

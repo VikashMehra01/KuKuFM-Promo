@@ -57,13 +57,20 @@ def bible_schema() -> dict:
 
 
 def batch_schema(episode_labels: Sequence[str], n_candidates: int) -> dict:
-    """One entry per requested episode, labels restricted to this batch."""
+    """Per-episode entries, labels restricted to this batch.
+
+    Measured limit (Gemini, Nov 2026): fixing the outer array size
+    (``minItems = maxItems = N``) is rejected with a bare INVALID_ARGUMENT for
+    N >= 5-6 episodes, and so is an object with one required key per episode;
+    the total schema complexity is the limit. Field-level constraints (required
+    fields, enums, >= 1 candidate) stay in the schema; per-episode *coverage* is
+    enforced in code instead (``pipeline`` re-asks any episode that is missing).
+    """
     labels = list(episode_labels)
     return _obj({
         "episodes": {
             "type": "array",
-            "minItems": len(labels),
-            "maxItems": len(labels),
+            "description": f"one entry for EACH of: {', '.join(labels)}",
             "items": _obj({
                 "episode": {"type": "string", "enum": labels},
                 "hooks": {

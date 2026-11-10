@@ -129,6 +129,43 @@ def test_unsupported_schema_downgrades_once_to_json_mode():
     assert seen == ["json_schema", "json_object", "json_object"]
 
 
+def test_generic_400_on_schema_retries_that_call_without_schema():
+    """Regression (Gemini): a too-complex schema returns a bare INVALID_ARGUMENT.
+    Retry that one call in JSON mode, but keep sending schemas to later calls."""
+    import json as _json
+
+    seen = []
+
+    def handler(request):
+        body = _json.loads(request.content)
+        fmt = body["response_format"]["type"]
+        seen.append(fmt)
+        if fmt == "json_schema" and body["messages"][1]["content"] == "big":
+            return httpx.Response(400, text='{"error": {"message": "Request contains an invalid argument."}}')
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": 1}'}}]})
+
+    client = _client(handler)
+    schema = {"type": "object", "properties": {}, "required": []}
+    assert client.complete_json("s", "big", schema=schema) == {"ok": 1}
+    assert client.complete_json("s", "small", schema=schema) == {"ok": 1}
+    assert seen == ["json_schema", "json_object", "json_schema"]
+    assert client.usage.schema_downgrades == 1
+
+
+def test_circuit_breaker_skips_a_primary_that_keeps_failing():
+    from promo_finder.llm import FallbackLLM, LLMError
+
+    def overloaded(system, user):
+        raise LLMError("503 high demand")
+
+    primary = FakeLLM(name="p:big", handler=overloaded)
+    fb = FallbackLLM(primary, FakeLLM(name="p:stable", handler=lambda s, u: {"ok": 1}), trip_after=2)
+    for _ in range(5):
+        assert fb.complete_json("s", "u") == {"ok": 1}
+    assert primary.usage.calls == 2  # tried twice, then never again this run
+    assert fb.tripped and fb.served == {"p:stable": 5}
+
+
 def test_json_mode_fallback_only_for_json_errors():
     seen = []
 

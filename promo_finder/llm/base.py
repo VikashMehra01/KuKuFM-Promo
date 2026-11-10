@@ -32,6 +32,7 @@ class Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     errors: int = 0
+    schema_downgrades: int = 0  # calls retried without json_schema after a 400
 
     def add(self, other: "Usage") -> None:
         self.calls += other.calls
@@ -39,6 +40,7 @@ class Usage:
         self.prompt_tokens += other.prompt_tokens
         self.completion_tokens += other.completion_tokens
         self.errors += other.errors
+        self.schema_downgrades += other.schema_downgrades
 
 
 @runtime_checkable

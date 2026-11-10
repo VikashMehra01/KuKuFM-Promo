@@ -87,9 +87,11 @@ def test_every_stage_sends_a_structured_output_schema(show_dir, tmp_path):
     names = [n for n, s in fake.schemas if s is not None]
     assert names == ["story_bible", "episode_batch", "montages", "clip_scores"]
     batch = dict(fake.schemas)["episode_batch"]["properties"]["episodes"]
-    # coverage is enforced by the schema itself: exactly one entry per requested episode
-    assert batch["minItems"] == batch["maxItems"] == 3
+    # labels are restricted to the batch; a fixed array size is NOT sent (Gemini rejects
+    # it as too complex for 5-6 episodes) - coverage is enforced by the code re-ask instead
+    assert "minItems" not in batch and "maxItems" not in batch
     assert batch["items"]["properties"]["episode"]["enum"] == ["E01", "E02", "E03"]
+    assert batch["items"]["properties"]["candidates"]["minItems"] == 1
     assert "cliffhanger_beat" in batch["items"]["properties"]["candidates"]["items"]["required"]
 
 

@@ -48,6 +48,7 @@ class CachedLLM:
                 prompt_tokens=self.inner.usage.prompt_tokens - before.prompt_tokens,
                 completion_tokens=self.inner.usage.completion_tokens - before.completion_tokens,
                 errors=self.inner.usage.errors - before.errors,
+                schema_downgrades=self.inner.usage.schema_downgrades - before.schema_downgrades,
             )
             self.usage.add(delta)
         if not isinstance(result, dict):

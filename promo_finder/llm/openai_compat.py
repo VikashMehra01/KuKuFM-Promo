@@ -89,12 +89,24 @@ class OpenAICompatClient:
                         f"{self.name}: the API rejected the credentials (HTTP {resp.status_code}). "
                         "Check the key in .env (no quotes/spaces) and that it belongs to this provider."
                     )
+                fmt = payload.get("response_format", {}).get("type")
+                if resp.status_code == 400 and fmt == "json_schema":
+                    # Gemini answers a too-complex schema with a generic INVALID_ARGUMENT, while
+                    # smaller schemas work: drop the schema for THIS request only and retry.
+                    explicit = bool(re.search(r"response_schema|json_schema|schema", resp.text, re.I))
+                    log.warning("%s rejected the response schema (%s); retrying this call in JSON mode",
+                                self.name, "unsupported" if explicit else "invalid argument")
+                    if explicit:
+                        self._schema_mode = False  # provider says schemas are unsupported: stop sending them
+                    self.usage.schema_downgrades += 1
+                    payload = {**payload, "response_format": {"type": "json_object"}}
+                    continue
                 if (
                     resp.status_code == 400
-                    and "response_format" in payload
-                    and re.search(r"response_format|response_mime_type|response_schema|json|schema", resp.text, re.I)
+                    and fmt == "json_object"
+                    and re.search(r"response_format|response_mime_type|json", resp.text, re.I)
                 ):
-                    # provider can't do this output mode: step down once (schema -> json -> plain), remember it
+                    # provider can't do JSON mode: plain text from now on (parser handles fences/prose)
                     payload = self._downgrade_format(payload, resp.text)
                     continue
                 if resp.status_code not in _RETRY_STATUS:

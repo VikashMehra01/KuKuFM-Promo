@@ -13,7 +13,10 @@ What happened when Promo Finder ran against Gemini's free tier on the 50-episode
 | LLM #2 | 1–10 | `gemini-3.1-flash-lite` (the primary was overloaded) | 6 | Worked, but exposed two bugs (§4.3, §4.4) |
 | LLM #3 | 1–10 | `gemini-3.1-flash-lite` | 5 + 1 from cache | Both bugs fixed; 37 candidates → 20 ranked |
 | LLM full, attempt 1 | 1–50 | `gemini-3.5-flash` + fallback | stopped | Two batches (12 episodes) lost to a schema error (§4.5); stopped to save quota |
-| **LLM full, attempt 2** | **1–50** | **3.5-flash: 4 calls; Flash-Lite fallback: 6** | **10 + 4 from cache** | **Completed: no errors, all 50 episodes covered, 189 → 20 ranked** |
+| LLM full, attempt 2 | 1–50 | 3.5-flash: 4 calls; Flash-Lite fallback: 6 | 10 + 4 from cache | Completed: no errors, all 50 episodes covered, 189 → 20 ranked (lenient parser). Kept as `runs/full_lenient_mixed/` |
+| Schema run (old project) | 1–50 | 3.5-flash-lite → 3.1-flash-lite | stopped | Gemini rejected 6-episode schemas with a generic 400, and the client didn't recover (§4.6) |
+| **LLM full, attempt 3 (current `outputs/`)** | **1–50** | **3.5-flash-lite (main) → 3.1-flash-lite** | **6 + 8 from cache** | **Completed: no errors, all 50 episodes covered, no re-asks. 159 → 155 valid → 20 ranked. Circuit breaker tripped once (§4.7)** |
+| Schema check | 6–11 | 3.5-flash-lite: 3, 3.1-flash-lite: 1 | 4 | The 6-episode batch that had failed: **0 schema downgrades**, no errors |
 
 ## 2. Output quality, episodes 1–10 (LLM run #3)
 
@@ -60,7 +63,17 @@ Top 10, checked by hand against the screenplay:
 - Of the AI's 81 candidates, 68 were "rejected", but almost all of those (101 across all sources) were cut at the judge shortlist (`judge_top_k: 40`), not for quality.
 - The montages the model returned were all duplicates of or too similar to single-episode clips, so none ranked this time.
 
-The run used the lenient parser. Structured output (§4.5) was added afterwards; it is covered by tests but has not yet been run against the live API.
+That run used the lenient parser; structured output (§4.5) came afterwards.
+
+### 3.1 Attempt 3: schema-enforced, stable Lite main model (current `outputs/`)
+
+- **Result:** completed with **no errors**, all 50 episodes covered, no episode re-asked, in about 8 minutes (generation 434 s, judging 30 s).
+- **Calls:** 6 made, plus 8 served from the cache (batches from the stopped schema run with identical requests).
+- **Answered by:** `gemini-3.5-flash-lite` 1, `gemini-3.1-flash-lite` 5. The circuit breaker tripped after the main model failed twice in a row (503, then a timeout).
+- **Schema:** 5 of the 6 fresh calls had their schema rejected and were retried in JSON mode. The cause was identified and fixed afterwards (§4.6); the 6-episode re-check had 0 downgrades.
+- **Candidates:** 159, of which 155 passed validation. Ranked: 6 from the AI, 14 rule-based. The Lite models still over-run: 36 AI clips were flagged "too long" and trimmed by code.
+
+**Stability across runs.** Attempt 3 (all Lite) and attempt 2 (3.5-flash + Lite) share **5 of their top 10 and 12 of their top 20** (`promo_finder stability`). The clips both runs chose are the most robust picks, and they include the E03 guards scene, the E01 altar confrontation and the E45 marriage-invalidated reveal. The rest of the ranking varies with the model, which is a reason to keep a human editor approving the final list.
 
 ## 4. Bottlenecks, in order of impact
 
@@ -117,7 +130,33 @@ The failed responses had been cached, so the fixed parser reused them for free.
 - **Coverage is enforced by the schema.** A batch must return exactly one entry per requested episode (`minItems = maxItems = number of episodes`, labels limited to that batch) with at least one clip each. The judge must score exactly the clips it was sent.
 - If a provider rejects `json_schema`, the client drops back to `json_object` once and remembers it. The lenient parser stays as a second safety net.
 
-### 4.6 Smaller issues found along the way
+### 4.6 Gemini rejects large structured-output schemas with a generic 400
+
+With structured output on, every 5–6-episode batch came back `400 INVALID_ARGUMENT: Request contains an invalid argument.`, while the judge, montage and 4-episode schemas were accepted. I isolated it with one call per schema variant against `gemini-3.5-flash-lite`:
+
+| Schema variant (6 episodes unless noted) | Result |
+|---|---|
+| Fixed-size array, `minItems = maxItems = 6` | 400 |
+| Same, 4 episodes | OK |
+| No fixed size on the outer array | **OK** |
+| Object with one required key per episode | 400 |
+
+The limit is total schema complexity, not any single keyword, and the error message doesn't say so.
+
+**Changes:**
+- Batch schemas keep every field-level constraint (required fields, enums including the batch's episode labels, at least 1 clip per episode) but no fixed outer size. Per-episode coverage is enforced in code (re-ask once, logged).
+- If a schema is still rejected, that one call is retried in JSON mode; the client keeps sending schemas to later calls. Downgrades are counted in `run_log.json` (`usage.*.schema_downgrades`).
+
+### 4.7 Unstable main model: circuit breaker
+
+The full Flash models (3.5, 3.6, 3.8) returned 503 on almost every call during testing, even with fresh quota on a new project. Waiting each call out costs time and quota.
+
+**Changes:**
+- The main model is now the most capable model that is reliably *available*: `gemini-3.5-flash-lite`, which answers in 2–40 s.
+- **Circuit breaker:** after 2 consecutive failures, the main model is skipped for the rest of the run, and `run_log` records `primary_tripped`.
+- The fallback has its own short timeout (120 s). One stalled fallback call had cost 5 minutes before this.
+
+### 4.8 Smaller issues found along the way
 
 - An invalid key used to let the run carry on as "llm" with every step silently falling back. It now stops the run immediately (`LLMAuthError`).
 - The "retry without JSON mode" path fired on any 400 error. It now fires only on errors about JSON mode.
@@ -134,7 +173,7 @@ The failed responses had been cached, so the fixed parser reused them for free.
 
 ## 6. Next steps
 
-- **Run the schema-enforced pipeline with a key from a new Google project.** The quota is per project per model, so a new key in the same project doesn't help. The schema changes every request's cache key, so this needs about 14 fresh calls.
+- **Re-run the full show with the schema fix once quota resets**, ideally with a full Flash model as the main model when its capacity recovers (`--generator gemini:gemini-3.8-flash`; the circuit breaker makes this safe). The quota is per project per model, and a new key only helps if it is in a new project.
 - Hand-pick ~10 gold promos (`eval/gold.json`) and report precision@10 and boundary error.
 - Once the 3.8-flash quota resets, run E1–E10 batched vs. one episode per call, and compare the two with `promo_finder stability`.
 - Try the two §5 fixes (hook-strength floor, cut before impact) and re-measure.
