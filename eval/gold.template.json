@@ -1,0 +1,7 @@
+{
+  "_instructions": "Copy to eval/gold.json. Hand-pick 10-15 promos the way an editor would (episode + start/end as in the screenplay). Then: python -m promo_finder eval --promos outputs/<show>/promos.json --gold eval/gold.json",
+  "show": "I Married a Broken Soldier. He was a Duke",
+  "promos": [
+    {"episode": 1, "start": "00:00.00", "end": "00:30.00", "note": "EXAMPLE - replace with your own pick"}
+  ]
+}

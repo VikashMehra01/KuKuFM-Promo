@@ -1,0 +1,16 @@
+# --- Confidential: Kuku input pack must never be committed or published ---
+input_pack/
+*.zip
+*.pdf
+
+# Outputs contain short script excerpts (hooks / cliffhangers) -> share privately
+outputs/
+
+# Local state
+.env
+.cache/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.streamlit/secrets.toml
