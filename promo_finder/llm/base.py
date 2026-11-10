@@ -16,6 +16,15 @@ class LLMResponseError(LLMError):
     """The provider answered but the content was not usable JSON."""
 
 
+class LLMAuthError(RuntimeError):
+    """Bad or missing credentials.
+
+    Deliberately NOT an ``LLMError``: per-step fallbacks catch ``LLMError``,
+    but an auth failure means every call will fail, so the run must stop
+    with a clear message instead of silently degrading to heuristics.
+    """
+
+
 @dataclass
 class Usage:
     calls: int = 0
@@ -39,7 +48,10 @@ class LLMClient(Protocol):
     name: str  # e.g. "gemini:gemini-2.5-flash"
     usage: Usage
 
-    def complete_json(self, system: str, user: str, *, temperature: float = 0.0) -> dict: ...
+    def complete_json(
+        self, system: str, user: str, *, temperature: float | None = None, schema: dict | None = None,
+        schema_name: str = "response",
+    ) -> dict: ...
 
 
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.S)
@@ -74,9 +86,14 @@ class FakeLLM:
     usage: Usage = field(default_factory=Usage)
     prompts: list[tuple[str, str]] = field(default_factory=list)
     handler: object = None  # optional callable(system, user) -> dict
+    schemas: list[tuple[str, dict | None]] = field(default_factory=list)  # (schema_name, schema) per call
 
-    def complete_json(self, system: str, user: str, *, temperature: float = 0.0) -> dict:
+    def complete_json(
+        self, system: str, user: str, *, temperature: float | None = None, schema: dict | None = None,
+        schema_name: str = "response",
+    ) -> dict:
         self.prompts.append((system, user))
+        self.schemas.append((schema_name, schema))
         self.usage.calls += 1
         if callable(self.handler):
             return self.handler(system, user)

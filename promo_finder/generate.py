@@ -10,12 +10,13 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from .beats import render_beats
 from .llm import LLMClient, LLMError
 from .models import Beat, Episode, HookType, Moment, Promo, Segment, StoryBible
 from .prompts import load_prompt
+from .schemas import batch_schema, cross_schema
 from .timecode import short_tc
 
 log = logging.getLogger(__name__)
@@ -25,6 +26,20 @@ log = logging.getLogger(__name__)
 
 class _Lenient(BaseModel):
     model_config = {"extra": "ignore"}
+
+
+def _keep_valid(model: type[BaseModel], items: object, where: str) -> list:
+    """Validate list items one by one: a single malformed item is dropped (and
+    logged) instead of invalidating the whole batch of episodes."""
+    if not isinstance(items, list):
+        return []
+    kept = []
+    for item in items:
+        try:
+            kept.append(model.model_validate(item))
+        except ValidationError as exc:
+            log.warning("Dropped malformed %s from LLM: %s", where, exc.errors()[0].get("msg", exc))
+    return kept
 
 
 class RawHook(_Lenient):
@@ -50,15 +65,26 @@ class RawCandidate(_Lenient):
     start_beat: str | None = None  # single-segment form
     end_beat: str | None = None
     segments: list[RawSegment] = Field(default_factory=list)  # multi-segment form
-    hook_beat: str
-    cliffhanger_beat: str
+    # Redundant by the prompt's own rules (hook = start, cliff = end), so models
+    # sometimes omit them; default them instead of rejecting the candidate.
+    hook_beat: str | None = None
+    cliffhanger_beat: str | None = None
     hook_type: str = "other"
     why_it_works: str = ""
 
     @field_validator("hook_beat", "cliffhanger_beat", "start_beat", "end_beat", mode="before")
     @classmethod
     def _strip(cls, v):
-        return v.strip() if isinstance(v, str) else v
+        return v.strip() or None if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _defaults(self) -> "RawCandidate":
+        segs = self.resolved_segments()
+        if not segs:
+            raise ValueError("candidate has no segments")
+        self.hook_beat = self.hook_beat or segs[0].start_beat
+        self.cliffhanger_beat = self.cliffhanger_beat or segs[-1].end_beat
+        return self
 
     def resolved_segments(self) -> list[RawSegment]:
         if self.segments:
@@ -74,6 +100,21 @@ class EpisodeAnalysis(_Lenient):
     cliffhangers: list[RawCliff] = Field(default_factory=list)
     candidates: list[RawCandidate] = Field(default_factory=list)
 
+    @field_validator("hooks", mode="before")
+    @classmethod
+    def _hooks(cls, v):
+        return _keep_valid(RawHook, v, "hook")
+
+    @field_validator("cliffhangers", mode="before")
+    @classmethod
+    def _cliffs(cls, v):
+        return _keep_valid(RawCliff, v, "cliffhanger")
+
+    @field_validator("candidates", mode="before")
+    @classmethod
+    def _candidates(cls, v):
+        return _keep_valid(RawCandidate, v, "candidate")
+
     def episode_number(self) -> int | None:
         if isinstance(self.episode, int):
             return self.episode
@@ -86,9 +127,19 @@ class EpisodeAnalysis(_Lenient):
 class BatchAnalysis(_Lenient):
     episodes: list[EpisodeAnalysis] = Field(default_factory=list)
 
+    @field_validator("episodes", mode="before")
+    @classmethod
+    def _episodes(cls, v):
+        return _keep_valid(EpisodeAnalysis, v, "episode entry")
+
 
 class CrossAnalysis(_Lenient):
     candidates: list[RawCandidate] = Field(default_factory=list)
+
+    @field_validator("candidates", mode="before")
+    @classmethod
+    def _candidates(cls, v):
+        return _keep_valid(RawCandidate, v, "montage candidate")
 
 
 # ----------------------------------------------------------------- conversion
@@ -203,7 +254,7 @@ def generate_batch_candidates(
     n_candidates: int,
     min_s: float,
     max_s: float,
-    temperature: float,
+    temperature: float | None,
     beat_index: dict[str, Beat],
 ) -> BatchResult:
     """One LLM call for 1..N consecutive episodes.
@@ -224,7 +275,10 @@ def generate_batch_candidates(
         min_s=int(min_s),
         max_s=int(max_s),
     )
-    data = llm.complete_json(system, user, temperature=temperature)
+    data = llm.complete_json(
+        system, user, temperature=temperature,
+        schema=batch_schema([f"E{n:02d}" for n in sorted(wanted)], n_candidates), schema_name="episode_batch",
+    )
     try:
         # tolerate a single-episode answer without the "episodes" wrapper
         batch = BatchAnalysis.model_validate(data if "episodes" in data else {"episodes": [data]})
@@ -300,13 +354,15 @@ def generate_cross_candidates(
     n_candidates: int,
     min_s: float,
     max_s: float,
-    temperature: float,
+    temperature: float | None,
     beat_index: dict[str, Beat],
 ) -> list[Promo]:
     system, user = load_prompt("cross_episode").render(
         bible=bible.render(), index=index, n_candidates=n_candidates, min_s=int(min_s), max_s=int(max_s)
     )
-    data = llm.complete_json(system, user, temperature=temperature)
+    data = llm.complete_json(
+        system, user, temperature=temperature, schema=cross_schema(n_candidates, max_segments=3), schema_name="montages"
+    )
     try:
         analysis = CrossAnalysis.model_validate(data)
     except ValidationError as exc:

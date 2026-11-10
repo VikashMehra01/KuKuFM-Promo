@@ -7,16 +7,25 @@ shape, so one small client covers all of them.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 
 import httpx
 
-from .base import LLMError, LLMResponseError, Usage, parse_json_content
+from .base import LLMAuthError, LLMError, LLMResponseError, Usage, parse_json_content
 
 log = logging.getLogger(__name__)
 
 _RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+_AUTH_TEXT = re.compile(r"api[ _-]?key|invalid authentication|unauthenticated|permission denied", re.I)
+
+
+def _is_auth_error(resp: httpx.Response) -> bool:
+    """401/403, or a 400 whose message is about the key (Gemini's style)."""
+    if resp.status_code in (401, 403):
+        return True
+    return resp.status_code == 400 and bool(_AUTH_TEXT.search(resp.text))
 
 
 class RateLimiter:
@@ -53,6 +62,7 @@ class OpenAICompatClient:
         self.model = model
         self.usage = Usage()
         self._json_mode = json_mode
+        self._schema_mode = True  # turned off for this client if the provider rejects json_schema
         self._max_retries = max_retries
         self._limiter = RateLimiter(requests_per_minute)
         headers = {"Content-Type": "application/json"}
@@ -74,11 +84,18 @@ class OpenAICompatClient:
             else:
                 if resp.status_code == 200:
                     return resp.json()
-                if resp.status_code == 400 and self._json_mode and "response_format" in payload:
-                    # some providers/models reject json mode: retry once without it
-                    log.warning("%s rejected response_format; retrying without JSON mode", self.name)
-                    self._json_mode = False
-                    payload = {k: v for k, v in payload.items() if k != "response_format"}
+                if _is_auth_error(resp):
+                    raise LLMAuthError(
+                        f"{self.name}: the API rejected the credentials (HTTP {resp.status_code}). "
+                        "Check the key in .env (no quotes/spaces) and that it belongs to this provider."
+                    )
+                if (
+                    resp.status_code == 400
+                    and "response_format" in payload
+                    and re.search(r"response_format|response_mime_type|response_schema|json|schema", resp.text, re.I)
+                ):
+                    # provider can't do this output mode: step down once (schema -> json -> plain), remember it
+                    payload = self._downgrade_format(payload, resp.text)
                     continue
                 if resp.status_code not in _RETRY_STATUS:
                     raise LLMError(f"{self.name} HTTP {resp.status_code}: {resp.text[:300]}")
@@ -97,16 +114,41 @@ class OpenAICompatClient:
         self.usage.errors += 1
         raise LLMError(f"{self.name}: gave up after {self._max_retries + 1} attempts: {last_error}")
 
-    def complete_json(self, system: str, user: str, *, temperature: float = 0.0) -> dict:
+    def _downgrade_format(self, payload: dict, error_text: str) -> dict:
+        current = payload["response_format"].get("type")
+        if current == "json_schema":
+            log.warning("%s rejected json_schema (%s); falling back to JSON mode", self.name, error_text[:120])
+            self._schema_mode = False
+            return {**payload, "response_format": {"type": "json_object"}}
+        log.warning("%s rejected JSON mode; falling back to plain text", self.name)
+        self._json_mode = False
+        return {k: v for k, v in payload.items() if k != "response_format"}
+
+    def complete_json(
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float | None = None,
+        schema: dict | None = None,
+        schema_name: str = "response",
+    ) -> dict:
         payload: dict = {
             "model": self.model,
-            "temperature": temperature,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         }
-        if self._json_mode:
+        if temperature is not None:  # omitted -> provider default
+            payload["temperature"] = temperature
+        if schema is not None and self._schema_mode:
+            # structured output: the provider constrains decoding to this schema
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "schema": schema, "strict": True},
+            }
+        elif self._json_mode:
             payload["response_format"] = {"type": "json_object"}
 
         data = self._post(payload)

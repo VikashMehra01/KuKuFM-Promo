@@ -18,7 +18,7 @@ from promo_finder.beats import build_alias_map, build_show_beats
 from promo_finder.cli import parse_episode_range
 from promo_finder.config import load_config
 from promo_finder.heuristics import beats_in
-from promo_finder.llm import ConfigError, missing_credentials
+from promo_finder.llm import ConfigError, LLMAuthError, missing_credentials
 from promo_finder.models import Beat, BeatKind, Segment
 from promo_finder.parse import load_show
 from promo_finder.pipeline import run_pipeline
@@ -64,7 +64,7 @@ if st.sidebar.button("Find promos", type="primary"):
         )
         st.session_state["run_file"] = str(result.paths["promos_json"])
         st.success(f"Done: {len(result.ranked)} promos ranked ({result.run_log['mode']} mode).")
-    except (ConfigError, FileNotFoundError, ValueError) as exc:
+    except (ConfigError, LLMAuthError, FileNotFoundError, ValueError) as exc:
         st.error(str(exc))
 
 st.sidebar.header("Open a run")

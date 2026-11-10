@@ -4,13 +4,25 @@
 llm:
   # "<provider>:<model>". Providers: gemini, groq, openrouter, openai, ollama, custom.
   # Swap models here (or via env PROMO_GENERATOR / PROMO_JUDGE) - no code changes.
-  generator: "gemini:gemini-2.5-flash"
-  judge: "gemini:gemini-2.5-flash"
-  temperature: 0.4
-  judge_temperature: 0.0
+  # Free tier (verified from the API's 429 details, Nov 2026): 20 requests/day PER MODEL
+  # per project, and failed/overloaded (503) attempts count too. A full 50-episode run
+  # needs ~14 calls, so it fits one model's daily quota.
+  # gemini-3.5-flash: strong Flash with free quota and availability. gemini-3.8-flash is
+  # newer but was heavily overloaded (503) when tested; 2.5-flash is closed to new keys.
+  generator: "gemini:gemini-3.5-flash"
+  judge: "gemini:gemini-3.5-flash"
+  # Used per call when the primary is overloaded (503) or out of quota (429) after retries.
+  # Flash-Lite is fast (~4s) but weaker: fewer candidates, more over-long clips. null disables.
+  fallback: "gemini:gemini-3.1-flash-lite"
+  # null = parameter not sent. Gemini 3.x docs: keep defaults; < 1.0 can cause looping.
+  # Set a number (e.g. 0.4 / 0.0) for older or non-Gemini models if you want.
+  temperature: null
+  judge_temperature: null
   requests_per_minute: 5      # free tiers are tight; raise for paid keys
   max_retries: 4
-  timeout_s: 120
+  timeout_s: 300               # reasoning models on ~13K-token batches can be slow
+  primary_retries_with_fallback: 1     # overloaded primary -> fail over fast...
+  primary_timeout_with_fallback_s: 240 # ...instead of 4 retries x 300s (3.5-flash is slow but worth waiting for)
   cache_dir: ".cache/llm"     # identical prompts are never paid for twice
 
 promo:

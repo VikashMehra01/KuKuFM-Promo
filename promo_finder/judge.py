@@ -18,6 +18,7 @@ from .heuristics import beats_in, heuristic_score
 from .llm import LLMClient, LLMError
 from .models import Beat, BeatKind, Promo
 from .prompts import load_prompt
+from .schemas import judge_schema
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ def judge_with_llm(
     beats_by_ep: dict[int, list[Beat]],
     *,
     batch_size: int,
-    temperature: float,
+    temperature: float | None,
     seed: int | None = 7,
 ) -> int:
     """Fill rubric scores in place. Returns how many promos were judged.
@@ -119,7 +120,11 @@ def judge_with_llm(
         clips = "\n\n".join(clip_transcript(p, beats_by_ep) for p in batch)
         system, user = prompt.render(clips=clips)
         try:
-            resp = _JudgeResponse.model_validate(llm.complete_json(system, user, temperature=temperature))
+            raw = llm.complete_json(
+                system, user, temperature=temperature,
+                schema=judge_schema([p.promo_id for p in batch]), schema_name="clip_scores",
+            )
+            resp = _JudgeResponse.model_validate(raw)
         except (LLMError, ValidationError) as exc:
             log.warning("Judge batch %d failed (%s); falling back to heuristics", i // batch_size + 1, exc)
             for p in batch:

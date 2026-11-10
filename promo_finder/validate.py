@@ -92,6 +92,34 @@ def _snap(seg: _Seg, edges: list[float], window: float, beats: list[Beat]) -> No
         seg.end = after[0]
 
 
+def _shrink_montage(segs: list[_Seg], ctx: "ValidationContext", cfg: PromoConfig, hook: Beat) -> bool:
+    """Fit a multi-segment promo into ~75% of max length by trimming whole beats.
+
+    Models are poor at summing durations, so code does it: each segment gets an
+    equal share of the budget. Segment 1 keeps its start (the hook) and loses
+    beats from its end; the last segment keeps its end (the cliffhanger) and
+    loses beats from its start; middle segments lose beats from their end.
+    """
+    if len(segs) < 2:
+        return False
+    budget = cfg.max_duration_s * 0.75 / len(segs)
+    changed = False
+    for k, s in enumerate(segs):
+        beats = ctx.beats_by_ep[s.episode]
+        is_last = k == len(segs) - 1
+        floor = hook.index if k == 0 else s.first  # never cut away the hook
+        while s.duration > budget and s.first < s.last:
+            if is_last:
+                s.first += 1
+            elif s.last > floor:
+                s.last -= 1
+            else:
+                break
+            s.start, s.end = _times(s, beats)
+            changed = True
+    return changed
+
+
 def _trim_to_earlier_cliff(segs: list[_Seg], beats: list[Beat], cfg: PromoConfig) -> Beat | None:
     """Shorten the last segment so it ends on the latest cliff-like beat that fits."""
     last = segs[-1]
@@ -188,6 +216,10 @@ def validate_promo(promo: Promo, ctx: ValidationContext, cfg: PromoConfig) -> Pr
         first.start, first.end = _times(first, first_beats)
 
     # ---- 5. duration ---------------------------------------------------------
+    if _total(segs) > cfg.max_duration_s and len(segs) > 1:
+        before = _total(segs)
+        if _shrink_montage(segs, ctx, cfg, hook):
+            flags.append(f"montage trimmed from {before:.0f}s to {_total(segs):.0f}s (equal share per segment)")
     if _total(segs) > cfg.max_duration_s:
         if (new_cliff := _trim_to_earlier_cliff(segs, last_beats, cfg)) is not None:
             flags.append(f"too long; trimmed to end on earlier cliff beat {new_cliff.id}")

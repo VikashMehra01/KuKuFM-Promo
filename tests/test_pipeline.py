@@ -81,6 +81,18 @@ def test_llm_pipeline_with_fake_model(show_dir, tmp_path):
     assert fake.usage.calls == 4
 
 
+def test_every_stage_sends_a_structured_output_schema(show_dir, tmp_path):
+    fake = FakeLLM(handler=make_fake_handler())
+    run_pipeline(show_dir, tmp_path / "out", Config(), generator=fake)
+    names = [n for n, s in fake.schemas if s is not None]
+    assert names == ["story_bible", "episode_batch", "montages", "clip_scores"]
+    batch = dict(fake.schemas)["episode_batch"]["properties"]["episodes"]
+    # coverage is enforced by the schema itself: exactly one entry per requested episode
+    assert batch["minItems"] == batch["maxItems"] == 3
+    assert batch["items"]["properties"]["episode"]["enum"] == ["E01", "E02", "E03"]
+    assert "cliffhanger_beat" in batch["items"]["properties"]["candidates"]["items"]["required"]
+
+
 def test_no_batching_mode_makes_one_call_per_episode(show_dir, tmp_path):
     cfg = Config()
     cfg.promo.max_episodes_per_call = 1
@@ -141,6 +153,24 @@ def test_rank_dedupes_and_prefers_early_episodes():
     ranked = rank_promos([a, dup, early], Config().ranking)
     assert [p.promo_id for p in ranked] == ["B", "A"]  # funnel bonus lifts E1; dup removed
     assert dup.status is PromoStatus.REJECTED
+
+
+def test_batch_survives_missing_and_malformed_fields():
+    """Regression (gemini-3.5-flash): candidates without cliffhanger_beat made the whole
+    6-episode batch fail validation. Now redundant fields default, bad items are dropped."""
+    from promo_finder.generate import BatchAnalysis
+
+    batch = BatchAnalysis.model_validate({"episodes": [
+        {"episode": "E06", "candidates": [
+            {"title": "no cliff field", "start_beat": "E06-B027", "end_beat": "E06-B047", "hook_beat": "E06-B027"},
+            {"title": "no segments at all"},  # unusable -> dropped, not fatal
+        ], "hooks": [{"beat_id": "E06-B027"}, {"strength": 5}]},  # second hook has no id -> dropped
+        "not even an object",
+    ]})
+    assert len(batch.episodes) == 1
+    cand = batch.episodes[0].candidates
+    assert len(cand) == 1 and cand[0].cliffhanger_beat == "E06-B047" and cand[0].hook_beat == "E06-B027"
+    assert len(batch.episodes[0].hooks) == 1
 
 
 def test_pack_batches_respects_budget_and_cap(show, ctx):

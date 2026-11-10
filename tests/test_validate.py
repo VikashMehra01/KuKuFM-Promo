@@ -92,6 +92,23 @@ def test_multi_segment_across_episodes(ctx, cfg):
     assert cfg.promo.min_duration_s <= p.duration <= cfg.promo.max_duration_s
 
 
+def test_overlong_montage_is_trimmed_per_segment(ctx, cfg):
+    """Mirrors a real model error: two near-whole-episode segments (~110s total)."""
+    s1a, s1b = _beat_at(ctx, 1, "slaps"), _beat_at(ctx, 1, "Fine.")
+    s2a, s2b = _beat_at(ctx, 2, "Good morning"), _beat_at(ctx, 2, "cliffhanger peak")
+    p = Promo(
+        promo_id="X-long", source="test",
+        segments=[Segment(episode=1, start_beat=s1a.id, end_beat=s1b.id), Segment(episode=2, start_beat=s2a.id, end_beat=s2b.id)],
+        hook=Moment(beat_id=s1a.id), cliffhanger=Moment(beat_id=s2b.id),
+    )
+    validate_promo(p, ctx, cfg.promo)
+    assert p.status is PromoStatus.VALID, p.reject_reasons
+    assert p.duration <= cfg.promo.max_duration_s
+    assert p.segments[0].start_beat == s1a.id  # hook kept
+    assert p.segments[-1].end_beat == s2b.id  # cliffhanger kept
+    assert any("montage trimmed" in f for f in p.flags)
+
+
 def test_overlapping_segments_rejected(ctx, cfg):
     a, b = _beat_at(ctx, 1, "slaps"), _beat_at(ctx, 1, "cliffhanger peak")
     p = Promo(

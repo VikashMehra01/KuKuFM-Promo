@@ -37,6 +37,51 @@ def build_alias_map(show: Show, extra: dict[str, str] | None = None) -> dict[str
     return mapping
 
 
+def filter_aliases(show: Show, aliases: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """Drop LLM-proposed aliases that contradict the script.
+
+    Rule: two speaker names that both speak in the same scene are different
+    people (characters don't talk to themselves). This catches real model
+    errors such as merging a rival into the heroine she is arguing with.
+    Returns (accepted aliases, human-readable rejections).
+    """
+    speakers_by_scene: list[set[str]] = [
+        {b.speaker for b in scene.blocks if b.speaker} for ep in show.episodes for scene in ep.scenes
+    ]
+    def clash(a: str, b: str) -> bool:
+        return any(a in s and b in s for s in speakers_by_scene)
+
+    # names the deterministic rule already ties to each character (trusted)
+    rule = build_alias_map(show)
+    trusted: dict[str, set[str]] = {}
+    for raw, canon in rule.items():
+        trusted.setdefault(canon, {canon}).add(raw)
+
+    accepted: dict[str, str] = {}
+    rejected: list[str] = []
+    # pass 1: an alias must never share a scene with any trusted name of its character
+    for alias, canonical in aliases.items():
+        alias, canonical = alias.upper(), canonical.upper()
+        group = trusted.get(canonical, {canonical}) - {alias}
+        other = next((g for g in group if clash(alias, g)), None) if alias != canonical else None
+        if other is not None:
+            rejected.append(f"{alias} -> {canonical}: speaks in the same scene as {other}")
+        else:
+            accepted[alias] = canonical
+    # pass 2: surviving LLM aliases of one character must not share a scene either
+    for alias, canonical in list(accepted.items()):
+        if alias == canonical or alias not in accepted:
+            continue
+        rival = next(
+            (o for o, c in accepted.items() if c == canonical and o not in (alias, canonical) and clash(alias, o)),
+            None,
+        )
+        if rival is not None:
+            del accepted[alias]
+            rejected.append(f"{alias} -> {canonical}: shares a scene with alias {rival}")
+    return accepted, rejected
+
+
 def _overlaps(a_start: float, a_end: float, b_start: float, b_end: float) -> bool:
     return a_start < b_end and b_start < a_end
 

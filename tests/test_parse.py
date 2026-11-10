@@ -100,6 +100,32 @@ def test_beats_aliases_and_visual(show):
     assert next(b for b in beats if b.text == "Good morning.").visual.startswith("Shot at 0s")
 
 
+def test_filter_aliases_rejects_people_who_talk_to_each_other(show):
+    from promo_finder.beats import filter_aliases
+
+    # MARA and TOM argue in the same scene -> they cannot be one person.
+    # NARRATOR never speaks, so nothing contradicts that alias.
+    accepted, rejected = filter_aliases(show, {"TOM": "MARA", "NARRATOR": "MARA", "MARA": "MARA"})
+    assert "TOM" not in accepted and any(r.startswith("TOM -> MARA") for r in rejected)
+    assert accepted["NARRATOR"] == "MARA" and accepted["MARA"] == "MARA"
+
+
+def test_filter_aliases_uses_title_stripped_names():
+    """Regression: the model aliased the heroine's rival to the heroine. In that
+    scene the heroine is credited as 'LADY MARA', not 'MARA'."""
+    from promo_finder.beats import filter_aliases
+    from promo_finder.models import Show
+
+    def ep(n, lines):
+        body = "\n".join(f"**{who}:**\nStart: (00:0{i}.00) | End: (00:0{i}.50)\n\"Line.\"" for i, who in enumerate(lines))
+        return parse_episode_text(f"EPISODE NUMBER: Episode {n}\nSCENE 01\n{body}\n", f"e{n}.txt")
+
+    show = Show(name="t", episodes=[ep(1, ["LADY MARA", "WOMAN IN RED"]), ep(2, ["MARA", "TOM"])])
+    accepted, rejected = filter_aliases(show, {"WOMAN IN RED": "MARA", "LADY MARA": "MARA"})
+    assert "WOMAN IN RED" not in accepted and "LADY MARA" in accepted
+    assert any("WOMAN IN RED" in r and "LADY MARA" in r for r in rejected)
+
+
 @pytest.mark.skipif(not Path("input_pack").exists(), reason="confidential input pack not present")
 def test_real_input_pack_parses_cleanly():
     show = load_show("input_pack")

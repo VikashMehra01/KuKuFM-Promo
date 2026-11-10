@@ -5,6 +5,8 @@ input_pack/
 
 # Outputs contain short script excerpts (hooks / cliffhangers) -> share privately
 outputs/
+runs/
+*.log
 
 # Local state
 .env

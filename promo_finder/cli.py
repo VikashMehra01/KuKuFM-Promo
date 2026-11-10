@@ -16,7 +16,7 @@ import sys
 from dotenv import load_dotenv
 
 from .config import load_config
-from .llm import ConfigError
+from .llm import ConfigError, LLMAuthError
 
 
 def parse_episode_range(text: str | None) -> set[int] | None:
@@ -143,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         return args.func(args)
-    except (ConfigError, FileNotFoundError, ValueError) as exc:
+    except (ConfigError, LLMAuthError, FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

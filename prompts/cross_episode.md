@@ -16,9 +16,10 @@ $index
 
 TASK
 Propose up to $n_candidates multi-segment promos. Each has 2 or 3 segments;
-each segment is a continuous run from start_beat to end_beat (same episode,
-start_beat may equal end_beat or be a few beats before it). Keep every segment
-short (about 5-20 seconds) so the total stays within $min_s-$max_s seconds.
+each segment is a continuous run from start_beat to end_beat (same episode).
+A segment is ONE MOMENT, not a scene: usually 2-6 consecutive beats, about
+5-20 seconds - check the beat times. Do NOT span a whole episode. The tool
+trims anything that runs long, so prefer tight segments.
 Segment 1 must open on the hook (hook_beat = segment 1 start_beat). The last
 segment must end on the cliffhanger (cliffhanger_beat = last segment end_beat).
 Order segments so the story reads naturally (usually episode order).

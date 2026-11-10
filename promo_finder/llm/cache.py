@@ -23,12 +23,15 @@ class CachedLLM:
         self._dir = Path(cache_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
 
-    def _key(self, system: str, user: str, temperature: float) -> str:
-        raw = json.dumps([self.inner.name, system, user, temperature], ensure_ascii=False)
+    def _key(self, system: str, user: str, temperature: float | None, schema: dict | None = None) -> str:
+        raw = json.dumps([self.inner.name, system, user, temperature, schema], ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    def complete_json(self, system: str, user: str, *, temperature: float = 0.0) -> dict:
-        path = self._dir / f"{self._key(system, user, temperature)}.json"
+    def complete_json(
+        self, system: str, user: str, *, temperature: float | None = None, schema: dict | None = None,
+        schema_name: str = "response",
+    ) -> dict:
+        path = self._dir / f"{self._key(system, user, temperature, schema)}.json"
         if path.exists():
             try:
                 self.usage.cached_calls += 1
@@ -38,7 +41,7 @@ class CachedLLM:
         before = Usage()
         before.add(self.inner.usage)
         try:
-            result = self.inner.complete_json(system, user, temperature=temperature)
+            result = self.inner.complete_json(system, user, temperature=temperature, schema=schema, schema_name=schema_name)
         finally:
             delta = Usage(
                 calls=self.inner.usage.calls - before.calls,

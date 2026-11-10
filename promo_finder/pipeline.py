@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import __version__
-from .beats import build_alias_map, build_show_beats, camera_edges
+from .beats import build_alias_map, build_show_beats, camera_edges, filter_aliases
 from .bible import build_bible
 from .config import Config
 from .export import export_run
@@ -29,7 +29,7 @@ from .generate import (
 )
 from .heuristics import generate_heuristic_candidates
 from .judge import apply_heuristics, combine_scores, judge_with_llm
-from .llm import ConfigError, LLMClient, LLMError, build_client, missing_credentials
+from .llm import ConfigError, LLMClient, LLMError, build_client, missing_credentials, served_by
 from .models import Beat, Episode, Promo, PromoStatus, Show, StoryBible
 from .parse import load_show
 from .prompts import load_prompt
@@ -111,8 +111,11 @@ def run_pipeline(
     if generator is None and judge is None:
         mode = resolve_mode(mode, cfg)
         if mode == "llm":
-            generator = build_client(cfg.llm.generator, cfg.llm)
-            judge = generator if cfg.llm.judge == cfg.llm.generator else build_client(cfg.llm.judge, cfg.llm)
+            fb = cfg.llm.fallback if cfg.llm.fallback and not missing_credentials(cfg.llm.fallback) else None
+            generator = build_client(cfg.llm.generator, cfg.llm, fallback=fb)
+            judge = (
+                generator if cfg.llm.judge == cfg.llm.generator else build_client(cfg.llm.judge, cfg.llm, fallback=fb)
+            )
     else:
         if generator is None:
             raise ValueError("an injected judge requires an injected generator")
@@ -131,10 +134,19 @@ def run_pipeline(
 
     # ---- 2. story bible + beats ---------------------------------------------
     report("Building story bible", 0.05)
-    bible, bible_llm = build_bible(show, generator if use_llm else None, temperature=0.2)
+    bible, bible_llm = build_bible(show, generator if use_llm else None, temperature=cfg.llm.temperature)
     if use_llm and not bible_llm:
         errors.append("story bible: LLM failed, used heuristic bible")
-    aliases = build_alias_map(show, bible.alias_map() if bible_llm else None)
+    alias_rejections: list[str] = []
+    llm_aliases = None
+    if bible_llm:
+        llm_aliases, alias_rejections = filter_aliases(show, bible.alias_map())
+        for r in alias_rejections:
+            log.warning("Rejected story-bible alias %s", r)
+        # keep prompts consistent with the script: drop rejected aliases from the bible text too
+        for char in bible.characters:
+            char.aliases = [a for a in char.aliases if llm_aliases.get(a.upper()) == char.name.upper()]
+    aliases = build_alias_map(show, llm_aliases)
     beats_by_ep = build_show_beats(show, aliases)
     beat_index = {b.id: b for beats in beats_by_ep.values() for b in beats}
     ctx = ValidationContext(
@@ -265,6 +277,8 @@ def run_pipeline(
         "models": {
             "generator": generator.name if generator else "heuristic",
             "judge": judge.name if judge else "heuristic",
+            "calls_served_by": served_by(generator) if judge is generator
+            else {**served_by(generator), **{f"judge:{k}": v for k, v in served_by(judge).items()}},
         },
         "prompt_versions": {n: load_prompt(n).version for n in ("bible", "episode_candidates", "cross_episode", "judge")},
         "config": cfg.model_dump(),
@@ -292,6 +306,8 @@ def run_pipeline(
         "errors": errors,
         "timings_s": timer.timings,
         "bible": bible.model_dump(),
+        "aliases_rejected": alias_rejections,
+        "aliases_applied": {k: v for k, v in aliases.items() if k != v},
     }
 
     out_dir = Path(out_root) / slugify(show.name)

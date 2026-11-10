@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from .llm import LLMClient, LLMError
 from .models import Character, Show, StoryBible
 from .prompts import load_prompt
+from .schemas import bible_schema
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def heuristic_bible(show: Show) -> StoryBible:
     return StoryBible(premise=premise, characters=[Character(name=n) for n in top])
 
 
-def build_bible(show: Show, llm: LLMClient | None, temperature: float = 0.2) -> tuple[StoryBible, bool]:
+def build_bible(show: Show, llm: LLMClient | None, temperature: float | None = None) -> tuple[StoryBible, bool]:
     """Return (bible, used_llm). Falls back to the heuristic bible on any LLM failure."""
     if llm is None:
         return heuristic_bible(show), False
@@ -34,7 +35,7 @@ def build_bible(show: Show, llm: LLMClient | None, temperature: float = 0.2) -> 
     loglines = "\n".join(f"E{ep.number:02d}: {ep.logline}" for ep in show.episodes)
     system, user = load_prompt("bible").render(show_name=show.name, speakers=speakers, loglines=loglines)
     try:
-        data = llm.complete_json(system, user, temperature=temperature)
+        data = llm.complete_json(system, user, temperature=temperature, schema=bible_schema(), schema_name="story_bible")
         bible = StoryBible.model_validate(data)
     except (LLMError, ValidationError) as exc:
         log.warning("Story bible LLM call failed (%s); using heuristic bible", exc)
