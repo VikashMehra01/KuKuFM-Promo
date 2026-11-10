@@ -1,0 +1,7 @@
+# Streamlit settings for the review UI
+[client]
+# Hide developer-only toolbar items such as "Deploy"
+toolbarMode = "viewer"
+
+[browser]
+gatherUsageStats = false

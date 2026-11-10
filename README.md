@@ -2,7 +2,7 @@
 
 Reads a folder of timestamped microdrama screenplays and returns a **ranked list of 20–60 s promo clips**. Each clip has its segment timestamps, the hook (first 3 s), the cliffhanger it cuts on, one line on why it works, and a reason for its posting order.
 
-Built for Kuku's AI Generalist assignment, Problem 1. The full design is in [DESIGN.md](DESIGN.md).
+Built for Kuku's AI Generalist assignment, Problem 1. The full design is in [DESIGN.md](DESIGN.md). How candidates are found, scored and ranked (with worked numbers) is in [docs/HOW_RANKING_WORKS.md](docs/HOW_RANKING_WORKS.md), and what happened on real runs is in [docs/RUN_REPORT.md](docs/RUN_REPORT.md).
 
 ## Quick start
 
