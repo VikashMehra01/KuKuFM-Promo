@@ -6,6 +6,7 @@ shape, so one small client covers all of them.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -19,6 +20,19 @@ log = logging.getLogger(__name__)
 
 _RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 _AUTH_TEXT = re.compile(r"api[ _-]?key|invalid authentication|unauthenticated|permission denied", re.I)
+
+
+def _schema_in_prompt(payload: dict) -> dict:
+    """Downgrade json_schema -> json_object, moving THE SAME schema into the system
+    message so the format spec still has a single source (no hand-written template)."""
+    schema = payload["response_format"]["json_schema"]["schema"]
+    messages = [dict(m) for m in payload["messages"]]
+    note = (
+        "\n\nRespond with ONE JSON object that validates against this JSON Schema "
+        "(all listed properties required):\n" + json.dumps(schema, separators=(",", ":"))
+    )
+    messages[0]["content"] = messages[0]["content"] + note
+    return {**payload, "messages": messages, "response_format": {"type": "json_object"}}
 
 
 def _is_auth_error(resp: httpx.Response) -> bool:
@@ -99,7 +113,7 @@ class OpenAICompatClient:
                     if explicit:
                         self._schema_mode = False  # provider says schemas are unsupported: stop sending them
                     self.usage.schema_downgrades += 1
-                    payload = {**payload, "response_format": {"type": "json_object"}}
+                    payload = _schema_in_prompt(payload)
                     continue
                 if (
                     resp.status_code == 400
@@ -154,12 +168,16 @@ class OpenAICompatClient:
         }
         if temperature is not None:  # omitted -> provider default
             payload["temperature"] = temperature
-        if schema is not None and self._schema_mode:
+        if schema is not None:
             # structured output: the provider constrains decoding to this schema
             payload["response_format"] = {
                 "type": "json_schema",
-                "json_schema": {"name": schema_name, "schema": schema, "strict": True},
+                "json_schema": {"name": schema_name, "schema": schema},
             }
+            if not self._schema_mode:  # provider can't do schemas: same schema, in the prompt
+                payload = _schema_in_prompt(payload)
+                if not self._json_mode:
+                    payload.pop("response_format")
         elif self._json_mode:
             payload["response_format"] = {"type": "json_object"}
 

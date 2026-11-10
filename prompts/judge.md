@@ -17,12 +17,4 @@ Rubric (integers 1-5):
 - intensity: emotional heat (betrayal, humiliation, danger, desire)
 - trope_fit: how well it sells a binge-able microdrama premise (revenge, secret identity, forbidden love...)
 
-Return JSON:
-{
-  "scores": [
-    {"clip_id": "...", "hook": 1-5, "cliffhanger": 1-5, "standalone": 1-5,
-     "intensity": 1-5, "trope_fit": 1-5,
-     "stranger_view": "<what a stranger thinks is happening, max 20 words>",
-     "why_it_works": "<one sentence on why it works (or fails), max 25 words>"}
-  ]
-}
+Score every clip, using its CLIP id.

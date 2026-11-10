@@ -28,28 +28,13 @@ EPISODE AFTER THIS BATCH: $next_logline
 $episodes
 
 TASK
-For EACH episode above ($episode_labels), find its strongest hooks and
-cliffhangers, then propose up to $n_candidates promo clips made of 1 segment
-each (a continuous stretch of beats from that same episode).
-A segment runs from start_beat to end_beat inclusive. Its length is the time from
-the start of start_beat to the end of end_beat - use the beat times to keep each
-promo between $min_s and $max_s seconds. The hook beat must be start_beat or
-start within 3 seconds of it. The cliffhanger beat must be end_beat.
-Prefer clips that do NOT overlap each other. Fewer, better clips beat many weak
-ones, but return an entry for EVERY listed episode.
-
-Return JSON:
-{
-  "episodes": [
-    {"episode": "E01",
-     "hooks": [{"beat_id": "...", "type": "physical|reveal|shock_line|threat|humiliation|romance|danger|other", "strength": 1-5, "note": "<max 12 words>"}],
-     "cliffhangers": [{"beat_id": "...", "strength": 1-5, "unresolved": "<what the viewer is left wanting, max 15 words>"}],
-     "candidates": [
-       {"title": "<max 8 words>",
-        "start_beat": "...", "end_beat": "...",
-        "hook_beat": "...", "cliffhanger_beat": "...",
-        "hook_type": "physical|reveal|shock_line|threat|humiliation|romance|danger|other",
-        "why_it_works": "<one sentence, max 25 words>"}
-     ]}
-  ]
-}
+For EACH episode above ($episode_labels), propose $clips_min to $n_candidates
+promo clips. Each clip is one continuous stretch of beats from that episode,
+from start_beat to end_beat inclusive.
+- Length = start of start_beat to end of end_beat. Use the beat times: keep each
+  clip between $min_s and $max_s seconds. Over-long clips get cut by the tool.
+- hook_beat is the thumb-stopping moment: start_beat itself, or a beat that
+  starts within 3 seconds of it.
+- end_beat is where the clip cuts: the unresolved moment, BEFORE the answer or
+  the reaction.
+- Clips from the same episode should not overlap; give each a different hook.

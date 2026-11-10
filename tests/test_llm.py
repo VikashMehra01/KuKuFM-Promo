@@ -113,20 +113,24 @@ def test_structured_output_sends_json_schema():
 def test_unsupported_schema_downgrades_once_to_json_mode():
     import json as _json
 
-    seen = []
+    seen, systems = [], []
 
     def handler(request):
-        fmt = _json.loads(request.content).get("response_format", {}).get("type")
+        body = _json.loads(request.content)
+        fmt = body.get("response_format", {}).get("type")
         seen.append(fmt)
+        systems.append(body["messages"][0]["content"])
         if fmt == "json_schema":
             return httpx.Response(400, text="Invalid JSON payload: response_schema is not supported")
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": 1}'}}]})
 
     client = _client(handler)
-    schema = {"type": "object", "properties": {}, "required": []}
+    schema = {"type": "object", "properties": {"marker_field": {"type": "string"}}, "required": ["marker_field"]}
     assert client.complete_json("s", "u", schema=schema) == {"ok": 1}
     assert client.complete_json("s", "u", schema=schema) == {"ok": 1}  # remembers: no second 400
     assert seen == ["json_schema", "json_object", "json_object"]
+    # single source of truth: the SAME schema moves into the prompt, no hand-written template
+    assert "marker_field" not in systems[0] and all("marker_field" in s for s in systems[1:])
 
 
 def test_generic_400_on_schema_retries_that_call_without_schema():

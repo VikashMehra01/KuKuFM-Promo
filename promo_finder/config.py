@@ -41,6 +41,8 @@ class PromoConfig(BaseModel):
     batch_token_budget: int = Field(12_000, ge=500)
     max_episodes_per_call: int = Field(6, ge=1)
     retry_missing_episodes: bool = True  # one follow-up call for episodes a batch skipped
+    clips_min_per_episode: int = Field(2, ge=1)  # schema minItems; with 1 the model returned the bare minimum
+    schema_fixed_episode_count: bool = True  # minItems=maxItems=N: decoder-enforced coverage (fits with the lean schema)
 
     @model_validator(mode="after")
     def _check_range(self) -> "PromoConfig":

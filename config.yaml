@@ -44,6 +44,8 @@ promo:
   batch_token_budget: 12000
   max_episodes_per_call: 6
   retry_missing_episodes: true         # re-ask once for any episode a batch skipped
+  clips_min_per_episode: 2             # ask for 2..candidates_per_episode clips (minItems 1 => model gave 1)
+  schema_fixed_episode_count: true     # decoder-enforced coverage; fits Gemini with the lean schema (RUN_REPORT 4.8)
 
 ranking:
   llm_weight: 0.7

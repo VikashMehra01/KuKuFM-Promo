@@ -20,17 +20,6 @@ each segment is a continuous run from start_beat to end_beat (same episode).
 A segment is ONE MOMENT, not a scene: usually 2-6 consecutive beats, about
 5-20 seconds - check the beat times. Do NOT span a whole episode. The tool
 trims anything that runs long, so prefer tight segments.
-Segment 1 must open on the hook (hook_beat = segment 1 start_beat). The last
-segment must end on the cliffhanger (cliffhanger_beat = last segment end_beat).
-Order segments so the story reads naturally (usually episode order).
-
-Return JSON:
-{
-  "candidates": [
-    {"title": "<max 8 words>",
-     "segments": [{"start_beat": "...", "end_beat": "..."}],
-     "hook_beat": "...", "cliffhanger_beat": "...",
-     "hook_type": "physical|reveal|shock_line|threat|humiliation|romance|danger|other",
-     "why_it_works": "<one sentence, max 25 words>"}
-  ]
-}
+Segment 1 must START on the hook beat. The last segment must END on the
+cliffhanger beat. Order segments so the story reads naturally (usually episode
+order).

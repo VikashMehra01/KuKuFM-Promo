@@ -17,6 +17,7 @@ What happened when Promo Finder ran against Gemini's free tier on the 50-episode
 | Schema run (old project) | 1–50 | 3.5-flash-lite → 3.1-flash-lite | stopped | Gemini rejected 6-episode schemas with a generic 400, and the client didn't recover (§4.6) |
 | **LLM full, attempt 3 (current `outputs/`)** | **1–50** | **3.5-flash-lite (main) → 3.1-flash-lite** | **6 + 8 from cache** | **Completed: no errors, all 50 episodes covered, no re-asks. 159 → 155 valid → 20 ranked. Circuit breaker tripped once (§4.7)** |
 | Schema check | 6–11 | 3.5-flash-lite: 3, 3.1-flash-lite: 1 | 4 | The 6-episode batch that had failed: **0 schema downgrades**, no errors |
+| **LLM full, attempt 4: lean schemas (current `outputs/`)** | **1–50** | **3.5-flash-lite only, no fallback needed** | **8 + 6 from cache, then 2 for re-judging** | **No errors, 0 schema downgrades, decoder-enforced coverage, 212 candidates → 20 ranked. See §3.2** |
 
 ## 2. Output quality, episodes 1–10 (LLM run #3)
 
@@ -74,6 +75,40 @@ That run used the lenient parser; structured output (§4.5) came afterwards.
 - **Candidates:** 159, of which 155 passed validation. Ranked: 6 from the AI, 14 rule-based. The Lite models still over-run: 36 AI clips were flagged "too long" and trimmed by code.
 
 **Stability across runs.** Attempt 3 (all Lite) and attempt 2 (3.5-flash + Lite) share **5 of their top 10 and 12 of their top 20** (`promo_finder stability`). The clips both runs chose are the most robust picks, and they include the E03 guards scene, the E01 altar confrontation and the E45 marriage-invalidated reveal. The rest of the ranking varies with the model, which is a reason to keep a human editor approving the final list.
+
+### 3.2 Attempt 4: lean schemas plus a fair judge shortlist (current `outputs/`)
+
+**What changed (§4.8):**
+- One lean schema per call type, asking only for what the model must decide.
+- No hand-written JSON templates in the prompts.
+- 2–3 clips per episode.
+- Fixed episode count back in the batch schema.
+
+**Result:**
+- **No errors and 0 schema downgrades.** Every call was answered by the main model, `gemini-3.5-flash-lite`.
+- All 50 episodes covered. Generation took 76 s, against 434 s for attempt 3.
+- No wrong aliases this time (the bible prompt no longer uses this show's speaker label as its example).
+- **The AI proposed twice as many clips:** 103, against 51 in attempt 3.
+
+**A second flaw this exposed: the judge shortlist was biased.**
+
+| | AI clips | Rule-based clips |
+|---|---|---|
+| Cut by the pre-judge shortlist (plain top 40 by heuristic score) | **62** | 48 |
+| Median heuristic score | 0.44 | 0.58 |
+| Mean judge score once judged | **3.25** | **3.26** |
+
+The rule-based clips were *selected* to maximise the heuristic score, so ranking the shortlist by that score let them crowd out AI clips the judge rated just as highly.
+
+**Fix:** `stratified_shortlist` alternates the best AI and best rule-based clips for the 40 judge places. Re-judging cost 2 calls (generation was cached):
+
+| | Before the fix | After |
+|---|---|---|
+| AI clips judged | 12 | 20 |
+| AI clips in the top 20 | 5 | **8** |
+| Mean judge score, AI vs rule-based | 3.25 / 3.26 | 3.43 / 3.47 |
+
+The top 10 now covers 9 different episodes. Six of them are in E01–E16, which is the early-episode bonus working; the rest run up to E28.
 
 ## 4. Bottlenecks, in order of impact
 
@@ -156,7 +191,24 @@ The full Flash models (3.5, 3.6, 3.8) returned 503 on almost every call during t
 - **Circuit breaker:** after 2 consecutive failures, the main model is skipped for the rest of the run, and `run_log` records `primary_tripped`.
 - The fallback has its own short timeout (120 s). One stalled fallback call had cost 5 minutes before this.
 
-### 4.8 Smaller issues found along the way
+### 4.8 The schema itself was over-built (review of how it was passed)
+
+The transport was correct: `response_format: json_schema` on the OpenAI-compatible endpoint, the documented route. Schema-enforced responses had 0 missing fields, against 32 across 5 JSON-mode responses. The content of the request was wrong in four ways:
+
+1. **Two format specs.** The prompts still contained a hand-written JSON template, which wasn't even valid JSON (e.g. `"strength": 1-5`, `"a|b|c"` enums) and conflicted with the schema. Google's docs pass the schema only in `response_format`.
+2. **Over-constraint.** Fixing the episode count on the heavy schema went over Gemini's complexity limit. `minItems: 1` turned the minimum into the target (about 1 clip per episode instead of about 2). `strict: true` is an OpenAI-only flag.
+3. **Redundant asks.** `cliffhanger_beat` equalled `end_beat` in 25 of 25 responses. The separate `hooks[]` and `cliffhangers[]` lists only fed the montage index, yet they made up most of the nesting.
+4. **Two definitions** (the schema and the parser) that had already drifted apart.
+
+**Fix:**
+- One **lean** schema per call type (`schemas.py`), asking only for what the model must decide. Derived fields are filled in by code.
+- No templates in the prompts. If a provider rejects a schema, the client moves *the same schema* into the prompt.
+- 2–3 clips per episode.
+- A test (`tests/test_schemas.py`) that fails if the schema and the parser disagree.
+
+The lean 6-episode schema is accepted **with** the fixed episode count, so coverage is enforced by the decoder again (`schema_fixed_episode_count: true`).
+
+### 4.9 Smaller issues found along the way
 
 - An invalid key used to let the run carry on as "llm" with every step silently falling back. It now stops the run immediately (`LLMAuthError`).
 - The "retry without JSON mode" path fired on any 400 error. It now fires only on errors about JSON mode.

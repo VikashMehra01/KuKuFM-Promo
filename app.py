@@ -47,6 +47,10 @@ input_path = st.sidebar.text_input("…or local folder", value="input_pack")
 mode = st.sidebar.selectbox("Mode", ["auto", "llm", "heuristic"], help="auto = LLM if an API key is set")
 cfg.llm.generator = st.sidebar.text_input("Generator model", value=cfg.llm.generator)
 cfg.llm.judge = st.sidebar.text_input("Judge model", value=cfg.llm.judge)
+fallback_text = st.sidebar.text_input(
+    "Fallback model", value=cfg.llm.fallback or "", help="used when the main model is overloaded; blank = none"
+)
+cfg.llm.fallback = fallback_text.strip() or None
 episodes_text = st.sidebar.text_input("Episodes (blank = all)", placeholder="1-10")
 if missing := missing_credentials(cfg.llm.generator):
     st.sidebar.caption(f"⚠️ {missing} not set → auto mode will use heuristics.")
@@ -93,6 +97,21 @@ c3.metric("Candidates", run_log["counts"]["candidates"])
 c4.metric("Ranked", len(promos))
 if run_log.get("errors"):
     st.warning(f"{len(run_log['errors'])} LLM step(s) fell back to heuristics — see run_log.json.")
+
+# Which model actually answered matters for judging quality (fallbacks are weaker models).
+served = dict(run_log.get("models", {}).get("calls_served_by", {}))
+tripped = served.pop("primary_tripped", None)
+calls = run_log.get("llm_calls", {})
+usage = (run_log.get("usage") or {}).get("generator") or {}
+if served or calls:
+    parts = [f"`{m}` × {n}" for m, n in served.items()]
+    line = "Calls answered by " + (", ".join(parts) if parts else "cache only")
+    line += f" · {calls.get('made', 0)} made, {calls.get('served_from_cache', 0)} from cache"
+    if usage.get("schema_downgrades"):
+        line += f" · {usage['schema_downgrades']} schema downgrade(s)"
+    st.caption(line)
+if tripped:
+    st.info("The main model failed repeatedly in this run (circuit breaker), so the fallback model answered the rest.")
 
 table = pd.DataFrame([
     {

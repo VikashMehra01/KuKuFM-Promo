@@ -33,7 +33,7 @@ from .llm import ConfigError, LLMClient, LLMError, build_client, missing_credent
 from .models import Beat, Episode, Promo, PromoStatus, Show, StoryBible
 from .parse import load_show
 from .prompts import load_prompt
-from .rank import dedupe, rank_promos
+from .rank import dedupe, rank_promos, stratified_shortlist
 from .validate import ValidationContext, validate_promo
 
 log = logging.getLogger(__name__)
@@ -180,6 +180,7 @@ def run_pipeline(
             eps[last + 1].logline if last + 1 < n_eps else "",
             n_candidates=pc.candidates_per_episode, min_s=pc.min_duration_s, max_s=pc.max_duration_s,
             temperature=cfg.llm.temperature, beat_index=beat_index,
+            clips_min=pc.clips_min_per_episode, fixed_count=pc.schema_fixed_episode_count,
         )
         candidates.extend(result.promos)
         analyses.update(result.analyses)
@@ -249,7 +250,7 @@ def run_pipeline(
         p.scores.quality = p.scores.heuristic + (0.1 if p.source.startswith("llm") else 0.0)
     if use_llm and judge is not None:
         # quota control: only the best-looking distinct clips go to the (paid/limited) judge
-        shortlist = dedupe(valid, rc.dedupe_iou)[: rc.judge_top_k]
+        shortlist = stratified_shortlist(dedupe(valid, rc.dedupe_iou), rc.judge_top_k)
         shortlisted = {id(p) for p in shortlist}
         for p in valid:
             if p.status is PromoStatus.VALID and id(p) not in shortlisted:

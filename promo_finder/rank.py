@@ -45,6 +45,28 @@ def dedupe(promos: Sequence[Promo], threshold: float) -> list[Promo]:
     return kept
 
 
+def stratified_shortlist(promos: Sequence[Promo], k: int) -> list[Promo]:
+    """Pick ``k`` promos for the judge, alternating between sources.
+
+    Why: the pre-judge ranking uses the heuristic score, and heuristic
+    candidates were *selected* to maximise that same score - so a plain
+    top-k lets them crowd out LLM candidates before the judge ever sees them
+    (real run: 62 LLM clips cut, yet judged LLM and heuristic clips scored
+    the same, 3.25 vs 3.26). Interleaving the best of each source gives every
+    source a fair hearing; leftover seats go to whoever has candidates left.
+    """
+    groups: dict[str, list[Promo]] = {}
+    for p in sorted(promos, key=lambda x: -x.scores.quality):
+        groups.setdefault("llm" if p.source.startswith("llm") else "heuristic", []).append(p)
+    queues = list(groups.values())
+    picked: list[Promo] = []
+    while len(picked) < k and any(queues):
+        for q in queues:
+            if q and len(picked) < k:
+                picked.append(q.pop(0))
+    return picked
+
+
 def _reason(p: Promo, bonus: float, for_variety: bool) -> str:
     parts = [f"score {p.scores.final * 100:.0f}"]
     rubric = {k: getattr(p.scores, k) for k in RUBRIC if getattr(p.scores, k) is not None}

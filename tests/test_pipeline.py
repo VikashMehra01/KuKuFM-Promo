@@ -89,10 +89,9 @@ def test_every_stage_sends_a_structured_output_schema(show_dir, tmp_path):
     batch = dict(fake.schemas)["episode_batch"]["properties"]["episodes"]
     # labels are restricted to the batch; a fixed array size is NOT sent (Gemini rejects
     # it as too complex for 5-6 episodes) - coverage is enforced by the code re-ask instead
-    assert "minItems" not in batch and "maxItems" not in batch
+    assert batch["minItems"] == batch["maxItems"] == 3  # decoder-enforced coverage (lean schema fits)
     assert batch["items"]["properties"]["episode"]["enum"] == ["E01", "E02", "E03"]
-    assert batch["items"]["properties"]["candidates"]["minItems"] == 1
-    assert "cliffhanger_beat" in batch["items"]["properties"]["candidates"]["items"]["required"]
+    assert batch["items"]["properties"]["clips"]["minItems"] == 2  # bare minimum of 1 is not the target
 
 
 def test_no_batching_mode_makes_one_call_per_episode(show_dir, tmp_path):
@@ -184,6 +183,22 @@ def test_pack_batches_respects_budget_and_cap(show, ctx):
     assert [len(b) for b in pack_batches(show.episodes, ctx.beats_by_ep, token_budget=per_ep, max_per_call=10)] == [1, 1, 1]
     # an episode bigger than the budget still gets its own batch (never dropped)
     assert sum(len(b) for b in pack_batches(show.episodes, ctx.beats_by_ep, token_budget=500, max_per_call=6)) == 3
+
+
+def test_stratified_shortlist_gives_each_source_a_fair_share():
+    """Regression: heuristic clips always out-score LLM clips on the heuristic, so a plain
+    top-k shortlist hid most LLM clips from the judge."""
+    from promo_finder.rank import stratified_shortlist
+
+    heur = [_p(f"H{i}", i + 1, 0, 30, 0.9 - i * 0.01) for i in range(10)]
+    llm = [_p(f"L{i}", i + 20, 0, 30, 0.5 - i * 0.01) for i in range(10)]
+    for p in llm:
+        p.source = "llm"
+    picked = stratified_shortlist(heur + llm, 6)
+    assert sum(p.source == "llm" for p in picked) == 3  # plain top-6 would have picked 0
+    assert [p.promo_id for p in picked[:2]] in (["H0", "L0"], ["L0", "H0"])
+    # leftover seats go to whichever source still has candidates
+    assert len(stratified_shortlist(heur + llm[:1], 6)) == 6
 
 
 def test_eval_and_stability(show_dir, tmp_path):

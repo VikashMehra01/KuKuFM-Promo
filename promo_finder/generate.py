@@ -10,7 +10,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator, model_validator
 
 from .beats import render_beats
 from .llm import LLMClient, LLMError
@@ -96,9 +96,11 @@ class RawCandidate(_Lenient):
 
 class EpisodeAnalysis(_Lenient):
     episode: int | str | None = None  # "E03" or 3 in batch responses
+    # optional extras (older responses / providers without schema support)
     hooks: list[RawHook] = Field(default_factory=list)
     cliffhangers: list[RawCliff] = Field(default_factory=list)
-    candidates: list[RawCandidate] = Field(default_factory=list)
+    # "clips" in the lean schema; "candidates" in older cached responses
+    candidates: list[RawCandidate] = Field(default_factory=list, validation_alias=AliasChoices("clips", "candidates"))
 
     @field_validator("hooks", mode="before")
     @classmethod
@@ -134,7 +136,7 @@ class BatchAnalysis(_Lenient):
 
 
 class CrossAnalysis(_Lenient):
-    candidates: list[RawCandidate] = Field(default_factory=list)
+    candidates: list[RawCandidate] = Field(default_factory=list, validation_alias=AliasChoices("montages", "candidates"))
 
     @field_validator("candidates", mode="before")
     @classmethod
@@ -256,6 +258,8 @@ def generate_batch_candidates(
     max_s: float,
     temperature: float | None,
     beat_index: dict[str, Beat],
+    clips_min: int = 2,
+    fixed_count: bool = False,
 ) -> BatchResult:
     """One LLM call for 1..N consecutive episodes.
 
@@ -271,14 +275,15 @@ def generate_batch_candidates(
         next_logline=next_logline or "(none)",
         episodes="\n\n".join(_episode_block(ep, beats_by_ep.get(ep.number, [])) for ep in episodes),
         episode_labels=labels,
+        clips_min=min(clips_min, n_candidates),
         n_candidates=n_candidates,
         min_s=int(min_s),
         max_s=int(max_s),
     )
-    data = llm.complete_json(
-        system, user, temperature=temperature,
-        schema=batch_schema([f"E{n:02d}" for n in sorted(wanted)], n_candidates), schema_name="episode_batch",
+    schema = batch_schema(
+        [f"E{n:02d}" for n in sorted(wanted)], min(clips_min, n_candidates), n_candidates, fixed_count=fixed_count
     )
+    data = llm.complete_json(system, user, temperature=temperature, schema=schema, schema_name="episode_batch")
     try:
         # tolerate a single-episode answer without the "episodes" wrapper
         batch = BatchAnalysis.model_validate(data if "episodes" in data else {"episodes": [data]})
@@ -327,13 +332,15 @@ def build_moment_index(
     lines: list[str] = []
     for ep in episodes:
         analysis = analyses.get(ep.number)
-        if analysis and (analysis.hooks or analysis.cliffhangers):
-            hook_ids = [h.beat_id for h in sorted(analysis.hooks, key=lambda h: -h.strength)[:per_episode]]
-            cliff_ids = [c.beat_id for c in sorted(analysis.cliffhangers, key=lambda c: -c.strength)[:per_episode]]
-        else:
-            beats = beats_by_ep.get(ep.number, [])
-            hook_ids = [b.id for b in sorted(beats, key=lambda b: -b.features.hook)[:per_episode]]
-            cliff_ids = [b.id for b in sorted(beats, key=lambda b: -b.features.cliff)[:per_episode]]
+        # The model's own clips are the best evidence of strong moments: use their hook and
+        # end beats, then top up with the strongest rule-based beats (deduplicated).
+        beats = beats_by_ep.get(ep.number, [])
+        llm_hooks = [c.hook_beat for c in analysis.candidates] if analysis else []
+        llm_cliffs = [c.cliffhanger_beat for c in analysis.candidates] if analysis else []
+        rule_hooks = [b.id for b in sorted(beats, key=lambda b: -b.features.hook)]
+        rule_cliffs = [b.id for b in sorted(beats, key=lambda b: -b.features.cliff)]
+        hook_ids = list(dict.fromkeys(x for x in llm_hooks + rule_hooks if x))[:per_episode]
+        cliff_ids = list(dict.fromkeys(x for x in llm_cliffs + rule_cliffs if x))[:per_episode]
 
         lines.append(f"E{ep.number:02d}: {ep.logline}")
         for tag, ids in (("HOOK", hook_ids), ("CLIFF", cliff_ids)):
