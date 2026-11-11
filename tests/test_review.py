@@ -4,6 +4,7 @@ import pytest
 
 from promo_finder.evaluate import evaluate
 from promo_finder.review import (
+    CLEAR,
     adjusted_segments,
     append_review,
     approved_posting_order,
@@ -74,3 +75,15 @@ def test_approved_posting_order_and_gold_and_summary(tmp_path):
     preds = tmp_path / "promos.json"
     preds.write_text(json.dumps({"promos": [{**p, "segments": [{**p["segments"][0]}]} for p in promos]}), encoding="utf-8")
     assert evaluate(preds, gold_path, top_k=3)["gold_recall"] == 1.0  # the gold file works with `eval`
+
+
+def test_clear_undoes_a_mark_and_keeps_the_history(tmp_path):
+    fb = tmp_path / "feedback.jsonl"
+    p = _promo("A", 1, 1, 0.0, 30.0)
+    append_review(fb, p, "approve")
+    append_review(fb, p, CLEAR)
+    assert load_reviews(fb) == {}  # unreviewed again
+    assert review_summary([p], load_reviews(fb))["reviewed"] == 0
+    append_review(fb, p, "reject")  # can be re-marked after clearing
+    assert load_reviews(fb)[clip_key(p["segments"])]["verdict"] == "reject"
+    assert len(fb.read_text(encoding="utf-8").splitlines()) == 3  # append-only: nothing deleted

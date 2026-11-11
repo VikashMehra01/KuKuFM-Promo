@@ -17,6 +17,7 @@ from .timecode import format_timecode
 
 VERDICTS = ("approve", "reject", "adjust")
 APPROVED = ("approve", "adjust")
+CLEAR = "clear"  # undo: the clip is unreviewed again (the file stays append-only, so history is kept)
 
 
 def clip_key(segments: list[dict]) -> str:
@@ -25,7 +26,7 @@ def clip_key(segments: list[dict]) -> str:
 
 
 def load_reviews(path: Path) -> dict[str, dict]:
-    """Latest review per clip key (later lines win). Malformed lines are skipped."""
+    """Latest review per clip key (later lines win; a ``clear`` removes it). Malformed lines are skipped."""
     latest: dict[str, dict] = {}
     if not path.exists():
         return latest
@@ -37,12 +38,14 @@ def load_reviews(path: Path) -> dict[str, dict]:
             continue
         if rec.get("verdict") in VERDICTS:
             latest[key] = rec
+        elif rec.get("verdict") == CLEAR:
+            latest.pop(key, None)
     return latest
 
 
 def append_review(path: Path, promo: dict, verdict: str, nudges: list[dict] | None = None, note: str = "") -> dict:
-    if verdict not in VERDICTS:
-        raise ValueError(f"verdict must be one of {VERDICTS}")
+    if verdict not in (*VERDICTS, CLEAR):
+        raise ValueError(f"verdict must be one of {(*VERDICTS, CLEAR)}")
     record = {
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "clip_key": clip_key(promo["segments"]),

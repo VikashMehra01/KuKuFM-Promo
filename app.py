@@ -25,6 +25,7 @@ from promo_finder.models import Beat, BeatKind, Segment
 from promo_finder.parse import load_show
 from promo_finder.pipeline import run_pipeline
 from promo_finder.review import (
+    CLEAR,
     append_review,
     approved_posting_order,
     clip_key,
@@ -353,14 +354,25 @@ def _save(verdict: str, with_nudges: bool = False) -> None:
     st.session_state["_next_promo"] = (idx + 1) % len(promos)
 
 
+def _clear() -> None:
+    """Button callback: undo a review mark. Stays on this promo so it can be re-marked."""
+    append_review(feedback_path, promo, CLEAR)
+    st.session_state["_review_flash"] = f"Cleared the review of #{promo['rank']}: it is unreviewed again."
+
+
 with right:
     # Review first, so approving/rejecting never needs scrolling.
     with st.container(border=True):
         st.markdown("**Editor review**")
         rev = reviews.get(key)
         if rev:
-            st.caption(f"Current: **{STATUS[rev['verdict']]}** ({rev['at'][:16].replace('T', ' ')} UTC)"
+            c1, c2 = st.columns([3, 2], vertical_alignment="center")
+            c1.caption(f"Current: **{STATUS[rev['verdict']]}** ({rev['at'][:16].replace('T', ' ')} UTC)"
                        + (f" - {rev['note']}" if rev.get("note") else ""))
+            c2.button("↩ Clear mark", width="stretch", on_click=_clear,
+                      help="Undo the approve/reject/adjust mark; the clip becomes unreviewed again")
+        else:
+            st.caption("Current: not reviewed")
         st.text_input("Note (optional)", key=f"note-{key}", placeholder="why?")
         b1, b2 = st.columns(2)
         b1.button("✅ Approve", type="primary", width="stretch", on_click=_save, args=("approve",))

@@ -125,6 +125,7 @@ Rules can find a strong hook and an unresolved ending, but they can't write a cr
 In the UI, the **Editor review** box sits at the top right of *Inspect a promo*:
 - **✅ Approve** and **❌ Reject** save with one click and jump to the next promo. An optional note is saved with the verdict.
 - **✏️ Adjust timing** lets you nudge each segment's start and end by up to ±10 s, then save the verdict "adjust".
+- **↩ Clear mark** (shown once a promo has a verdict) undoes it, so the clip is unreviewed again. It appends a `clear` record rather than deleting lines, so the file keeps the full history.
 
 Each review is appended to `outputs/<show>/feedback.jsonl` (`promo_finder/review.py`). The latest verdict for a clip wins, and reviews are used like this:
 
