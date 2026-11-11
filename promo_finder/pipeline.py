@@ -21,6 +21,7 @@ from .bible import build_bible
 from .config import Config
 from .export import export_run
 from .generate import (
+    CameraText,
     EpisodeAnalysis,
     build_moment_index,
     generate_batch_candidates,
@@ -164,13 +165,15 @@ def run_pipeline(
 
     # ---- 3. candidates -------------------------------------------------------
     pc = cfg.promo
+    camera = CameraText(max_chars=pc.camera_text_chars, dedupe=pc.camera_dedupe)
     eps = show.episodes
     n_eps = len(eps)
     candidates: list[Promo] = []
     analyses: dict[int, EpisodeAnalysis] = {}
     llm_covered: set[int] = set()
     batches = (
-        pack_batches(eps, beats_by_ep, token_budget=pc.batch_token_budget, max_per_call=pc.max_episodes_per_call)
+        pack_batches(eps, beats_by_ep, token_budget=pc.batch_token_budget, max_per_call=pc.max_episodes_per_call,
+                     camera=camera)
         if use_llm else []
     )
     planned = estimate_llm_calls(len(batches), n_eps, cfg) if use_llm else 0
@@ -189,6 +192,7 @@ def run_pipeline(
             n_candidates=pc.candidates_per_episode, min_s=pc.min_duration_s, max_s=pc.max_duration_s,
             temperature=cfg.llm.temperature, beat_index=beat_index,
             clips_min=pc.clips_min_per_episode, fixed_count=pc.schema_fixed_episode_count,
+            camera=camera,
         )
         candidates.extend(result.promos)
         analyses.update(result.analyses)
@@ -208,7 +212,8 @@ def run_pipeline(
     # Quality guard: an episode the batch skipped gets one smaller follow-up call.
     missing = [ep for ep in eps if ep.number not in llm_covered] if use_llm else []
     if missing and pc.retry_missing_episodes:
-        retry = pack_batches(missing, beats_by_ep, token_budget=pc.batch_token_budget, max_per_call=pc.max_episodes_per_call)
+        retry = pack_batches(missing, beats_by_ep, token_budget=pc.batch_token_budget, max_per_call=pc.max_episodes_per_call,
+                     camera=camera)
         log.info("Re-asking for %d episode(s) without usable candidates in %d call(s)", len(missing), len(retry))
         for batch in retry:
             report(f"Re-asking for {labels(batch)}", 0.65)
@@ -269,6 +274,7 @@ def run_pipeline(
         judge_with_llm(
             judge, shortlist, beats_by_ep,
             batch_size=rc.judge_batch_size, temperature=cfg.llm.judge_temperature, seed=rc.judge_shuffle_seed,
+            with_camera=rc.judge_sees_camera,
         )
     # rule mode: no judge, so the ranking uses the rule-based score alone (combine_scores)
     combine_scores([p for p in valid if p.status is PromoStatus.VALID], rc)

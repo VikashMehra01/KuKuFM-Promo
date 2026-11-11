@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field
 
 from .timecode import format_timecode, short_tc
 
+VISUAL_SEP = " / "  # joins the camera shots attached to one beat
+
 # --------------------------------------------------------------------------- screenplay
 
 
@@ -106,16 +108,28 @@ class Beat(BaseModel):
     visual: str = ""  # overlapping camera description
     features: BeatFeatures = Field(default_factory=BeatFeatures)
 
-    def render(self, max_visual: int = 110) -> str:
-        """Compact one-line form used in prompts and reports."""
+    def camera_shots(self) -> list[str]:
+        """The camera shots overlapping this beat (empty for VISUAL beats, whose text *is* the shot)."""
+        if self.kind is BeatKind.VISUAL or not self.visual:
+            return []
+        return [s for s in self.visual.split(VISUAL_SEP) if s]
+
+    def render(self, max_visual: int | None = None, visual: str | None = None) -> str:
+        """Compact one-line form used in prompts.
+
+        ``visual`` overrides the attached camera text (e.g. with repeated shots removed);
+        ``max_visual`` truncates it (None = full text).
+        """
         head = f"{self.id} [{short_tc(self.start)}-{short_tc(self.end)}]"
         if self.kind is BeatKind.DIALOGUE:
             emo = f" ({self.emotion})" if self.emotion else ""
             body = f'{self.speaker}{emo}: "{self.text}"'
         else:
             body = f"{self.kind.value}: {self.text}"
-        if self.visual and self.kind is not BeatKind.VISUAL:
-            vis = self.visual if len(self.visual) <= max_visual else self.visual[: max_visual - 1] + "…"
+        vis = self.visual if visual is None else visual
+        if vis and self.kind is not BeatKind.VISUAL:
+            if max_visual is not None and len(vis) > max_visual:
+                vis = vis[: max_visual - 1] + "…"
             body += f" | cam: {vis}"
         return f"{head} {body}"
 

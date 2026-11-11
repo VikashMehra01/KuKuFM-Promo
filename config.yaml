@@ -46,6 +46,9 @@ promo:
   retry_missing_episodes: true         # re-ask once for any episode a batch skipped
   clips_min_per_episode: 2             # ask for 2..candidates_per_episode clips (minItems 1 => model gave 1)
   schema_fixed_episode_count: true     # decoder-enforced coverage; fits Gemini with the lean schema (RUN_REPORT 4.8)
+  # Camera lines in generator prompts (docs/CAMERA_TEXT_EXPERIMENT.md). Before 11 Nov: 110 / false.
+  camera_text_chars: null              # null = full shot description; a number truncates it
+  camera_dedupe: true                  # list a shot once, on the first line it covers (25% of camera text was repeats)
 
 ranking:
   llm_weight: 0.7
@@ -63,4 +66,5 @@ ranking:
   judge_batch_size: 20        # ~300 tokens per clip, so 20 clips ~= 6K tokens per call
   judge_top_k: 40             # shortlist by heuristic score before LLM judging (quota control)
   judge_shuffle_seed: 7       # shuffled (reproducibly) so batch position doesn't bias scores
+  judge_sees_camera: true     # judge transcripts include camera lines (before 11 Nov: false)
   top_n: 20

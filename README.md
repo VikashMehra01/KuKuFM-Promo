@@ -64,6 +64,7 @@ parse (code) → beats (code) → story bible (1 LLM call) → candidates per ep
 
 - **The LLM never writes timestamps.** It refers to beat IDs (`E03-B017`), and code maps those to exact times. This removes a whole class of made-up timings.
 - **Code enforces the rules in the brief.** Clips must be 20–60 s, have the hook within 3 s, end on the cliffhanger, never cut mid-line, and cut on camera-shot edges. Each automatic repair is recorded in `flags`.
+- **Camera lines are part of the script the LLM reads.** Rules attach each `CAMERA` shot to the lines it overlaps (or make it a `VISUAL` beat), and both the generator and the judge see the full shot descriptions, each shot listed once. What this changed, measured against judge noise, is in [docs/CAMERA_TEXT_EXPERIMENT.md](docs/CAMERA_TEXT_EXPERIMENT.md).
 - **The judge only sees the clip.** It gets no story context, so its `standalone` score and `stranger_view` act as the "makes sense to a new viewer" test.
 - **LLM mode needs the API key and never silently switches to rules.** A missing key stops the run before any work, and a rejected key stops it on the first call. The rule-based mode only runs when chosen explicitly.
 - **A failed call mid-run degrades only that step.** For example, an episode batch that fails after retries and the fallback model gets rule-based candidates. The failure is logged in `run_log.json` and shown in the UI, never hidden.

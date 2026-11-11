@@ -15,7 +15,7 @@ from collections import Counter
 from collections.abc import Iterable
 
 from .heuristics import score_beat
-from .models import Beat, BeatKind, Block, BlockType, Episode, Show
+from .models import VISUAL_SEP, Beat, BeatKind, Block, BlockType, Episode, Show
 
 _TITLE_PREFIX = re.compile(r"^(LADY|LORD|SIR|MISS|MISTRESS|MASTER|THE)\s+")
 
@@ -88,7 +88,7 @@ def _overlaps(a_start: float, a_end: float, b_start: float, b_end: float) -> boo
 
 def _attach_visual(beat_start: float, beat_end: float, cameras: Iterable[Block]) -> str:
     texts = [c.text for c in cameras if _overlaps(beat_start, beat_end, c.start, c.end)]
-    return " / ".join(texts)
+    return VISUAL_SEP.join(texts)
 
 
 _KIND = {
@@ -143,5 +143,29 @@ def camera_edges(episode: Episode) -> list[float]:
     return sorted(edges)
 
 
-def render_beats(beats: Iterable[Beat]) -> str:
-    return "\n".join(b.render() for b in beats)
+def new_camera_shots(beats: Iterable[Beat], dedupe: bool = True) -> list[str]:
+    """Attached camera text per beat, with shots already listed on the previous beat removed.
+
+    One camera shot often spans several lines, so attaching it to each repeats it
+    (about 25% of all camera text on the input pack). Listing it once, on the first
+    line it covers, keeps the information and saves the tokens.
+    """
+    out: list[str] = []
+    prev: list[str] = []
+    for b in beats:
+        shots = b.camera_shots()
+        shown = [s for s in shots if s not in prev] if dedupe else shots
+        out.append(VISUAL_SEP.join(shown))
+        if b.kind is not BeatKind.VISUAL:
+            prev = shots
+    return out
+
+
+def render_beats(beats: Iterable[Beat], max_visual: int | None = None, dedupe_camera: bool = True) -> str:
+    """Beats as prompt lines. Defaults: full camera text, each shot listed once.
+
+    ``max_visual=110, dedupe_camera=False`` reproduces the original (pre-Nov-11) prompts exactly.
+    """
+    beats = list(beats)
+    visuals = new_camera_shots(beats, dedupe_camera)
+    return "\n".join(b.render(max_visual=max_visual, visual=v) for b, v in zip(beats, visuals))

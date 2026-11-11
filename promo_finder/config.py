@@ -43,6 +43,10 @@ class PromoConfig(BaseModel):
     retry_missing_episodes: bool = True  # one follow-up call for episodes a batch skipped
     clips_min_per_episode: int = Field(2, ge=1)  # schema minItems; with 1 the model returned the bare minimum
     schema_fixed_episode_count: bool = True  # minItems=maxItems=N: decoder-enforced coverage (fits with the lean schema)
+    # Camera lines in generator prompts. None = full text (old prompts: 110). dedupe lists a shot once
+    # instead of on every line it spans (old prompts: false). See docs/CAMERA_TEXT_EXPERIMENT.md.
+    camera_text_chars: int | None = Field(None, ge=10)
+    camera_dedupe: bool = True
 
     @model_validator(mode="after")
     def _check_range(self) -> "PromoConfig":
@@ -70,6 +74,7 @@ class RankingConfig(BaseModel):
     judge_batch_size: int = Field(20, ge=1)  # ~300 tokens per clip -> ~6K tokens per call
     judge_top_k: int = Field(40, ge=1)  # only the best-looking K candidates are sent to the judge
     judge_shuffle_seed: int = 7  # shuffle before batching to avoid position/ordering bias
+    judge_sees_camera: bool = True  # include camera lines in the judge's clip transcripts (old prompts: false)
     top_n: int = Field(20, ge=1)
 
 

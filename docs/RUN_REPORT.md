@@ -110,6 +110,10 @@ The rule-based clips were *selected* to maximise the heuristic score, so ranking
 
 The top 10 now covers 9 different episodes. Six of them are in E01–E16, which is the early-episode bonus working; the rest run up to E28.
 
+### 3.3 Camera text (11 Nov)
+
+A follow-up run sent the full camera-shot descriptions to the generator and the judge (`runs/camera/`, 13 calls, 0 errors). It shares 13 of 20 with the run above. The judge's standalone scores rose and its cliffhanger scores fell, both beyond run-to-run noise. The ranking was not clearly better. Details: [CAMERA_TEXT_EXPERIMENT.md](CAMERA_TEXT_EXPERIMENT.md).
+
 ## 4. Bottlenecks, in order of impact
 
 ### 4.1 Free-tier quota: 20 requests per day, per model, and failed attempts count

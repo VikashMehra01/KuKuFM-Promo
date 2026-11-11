@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from .config import RankingConfig
+from .beats import new_camera_shots
 from .heuristics import beats_in, heuristic_score
 from .llm import LLMClient, LLMError
 from .models import Beat, BeatKind, Promo
@@ -51,20 +52,35 @@ class _JudgeResponse(BaseModel):
     scores: list[_RawScore] = Field(default_factory=list)
 
 
-def clip_transcript(promo: Promo, beats_by_ep: dict[int, list[Beat]]) -> str:
-    """What a viewer sees, with times relative to the clip start."""
+CAMERA_NOTE = (
+    ' A line ending in "| cam: ..." also says what the camera shows while it plays;'
+    " a shot is listed once, on the first line it covers."
+)
+
+
+def clip_transcript(promo: Promo, beats_by_ep: dict[int, list[Beat]], with_camera: bool = True) -> str:
+    """What a viewer sees and hears, with times relative to the clip start.
+
+    ``with_camera`` adds the camera shots that overlap dialogue/action lines. Without it
+    (the original behaviour) only camera shots with no overlapping line reach the judge,
+    so a slap or reveal written only as a shot is invisible to it.
+    """
     lines = [f"CLIP {promo.promo_id} ({promo.duration:.0f}s)"]
     offset = 0.0
     for n, seg in enumerate(promo.segments):
         if n:
             lines.append("--- CUT ---")
-        for b in beats_in(seg, beats_by_ep.get(seg.episode, [])):
+        seg_beats = beats_in(seg, beats_by_ep.get(seg.episode, []))
+        cams = new_camera_shots(seg_beats) if with_camera else [""] * len(seg_beats)
+        for b, cam in zip(seg_beats, cams):
             t = offset + (b.start - seg.start)
             if b.kind is BeatKind.DIALOGUE:
                 emo = f" ({b.emotion})" if b.emotion else ""
                 text = f'{b.speaker}{emo}: "{b.text}"'
             else:
                 text = f"[{b.kind.value.lower()}] {b.text}"
+            if cam:
+                text += f" | cam: {cam}"
             lines.append(f"  {t:5.1f}s {text}")
         offset += seg.duration
     return "\n".join(lines)
@@ -102,6 +118,7 @@ def judge_with_llm(
     batch_size: int,
     temperature: float | None,
     seed: int | None = 7,
+    with_camera: bool = True,
 ) -> int:
     """Fill rubric scores in place. Returns how many promos were judged.
 
@@ -117,8 +134,8 @@ def judge_with_llm(
     judged = 0
     for i in range(0, len(order), batch_size):
         batch = order[i : i + batch_size]
-        clips = "\n\n".join(clip_transcript(p, beats_by_ep) for p in batch)
-        system, user = prompt.render(clips=clips)
+        clips = "\n\n".join(clip_transcript(p, beats_by_ep, with_camera) for p in batch)
+        system, user = prompt.render(clips=clips, camera_note=CAMERA_NOTE if with_camera else "")
         try:
             raw = llm.complete_json(
                 system, user, temperature=temperature,

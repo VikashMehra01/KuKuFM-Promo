@@ -203,6 +203,7 @@ def pack_batches(
     *,
     token_budget: int,
     max_per_call: int,
+    camera: CameraText | None = None,
 ) -> list[list[Episode]]:
     """Group consecutive episodes into batches bounded by beat tokens and count.
 
@@ -210,11 +211,12 @@ def pack_batches(
     context for each other's cliffhangers. An episode larger than the budget
     still gets a batch of its own.
     """
+    camera = camera or CameraText()
     batches: list[list[Episode]] = []
     current: list[Episode] = []
     used = 0
     for ep in episodes:
-        cost = estimate_tokens(render_beats(beats_by_ep.get(ep.number, [])))
+        cost = estimate_tokens(camera.render(beats_by_ep.get(ep.number, [])))
         if current and (used + cost > token_budget or len(current) >= max_per_call):
             batches.append(current)
             current, used = [], 0
@@ -225,13 +227,29 @@ def pack_batches(
     return batches
 
 
-def _episode_block(ep: Episode, beats: Sequence[Beat]) -> str:
+@dataclass(frozen=True)
+class CameraText:
+    """How camera lines appear in generator prompts (see ``PromoConfig.camera_*``)."""
+
+    max_chars: int | None = None  # None = full text
+    dedupe: bool = True  # list a shot once, on the first line it covers
+
+    def render(self, beats: Sequence[Beat]) -> str:
+        return render_beats(beats, max_visual=self.max_chars, dedupe_camera=self.dedupe)
+
+    @property
+    def format_note(self) -> str:
+        note = "| cam: visual"
+        return note + "; a camera shot is listed once, on the first line it covers" if self.dedupe else note
+
+
+def _episode_block(ep: Episode, beats: Sequence[Beat], camera: CameraText) -> str:
     label = f"E{ep.number:02d}"
     return (
         f"=== EPISODE {label} ===\n"
         f"SUMMARY: {ep.logline}\n"
-        f"BEATS (format: ID [start-end] SPEAKER (emotion): \"line\" | cam: visual)\n"
-        f"{render_beats(beats)}"
+        f"BEATS (format: ID [start-end] SPEAKER (emotion): \"line\" {camera.format_note})\n"
+        f"{camera.render(beats)}"
     )
 
 
@@ -260,6 +278,7 @@ def generate_batch_candidates(
     beat_index: dict[str, Beat],
     clips_min: int = 2,
     fixed_count: bool = False,
+    camera: CameraText | None = None,
 ) -> BatchResult:
     """One LLM call for 1..N consecutive episodes.
 
@@ -273,7 +292,9 @@ def generate_batch_candidates(
         bible=bible.render(),
         prev_logline=prev_logline or "(none - the batch starts at the first episode)",
         next_logline=next_logline or "(none)",
-        episodes="\n\n".join(_episode_block(ep, beats_by_ep.get(ep.number, [])) for ep in episodes),
+        episodes="\n\n".join(
+            _episode_block(ep, beats_by_ep.get(ep.number, []), camera or CameraText()) for ep in episodes
+        ),
         episode_labels=labels,
         clips_min=min(clips_min, n_candidates),
         n_candidates=n_candidates,

@@ -6,7 +6,7 @@ harsh: a 5 is rare, 3 is average. JSON only.
 
 ### USER
 Score each clip below. Each clip lists its segments in play order; "--- CUT ---"
-marks a jump between moments.
+marks a jump between moments.$camera_note
 
 $clips
 
